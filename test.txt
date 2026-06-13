@@ -1,5 +1,4 @@
-### USER (pavan.mudunuri@dell.com)
-give the code for this if not possiable in single go i will hit continue you continue```
+```
 ================================================================================
 GRAVITY HABIT — FINAL MASTER SYSTEM PROMPT
 Production Build Specification | Version 1.0 FINAL
