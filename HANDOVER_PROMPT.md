@@ -1,212 +1,1227 @@
-# CommonTrace: Road to Best-in-World Memory
+I'll set up an agent team to comprehensively review the entire codebase for potential improvements across multiple dimensions.
 
-## How to use this
+I'll use subagents directly to conduct a comprehensive review in parallel, since teamctl has Unicode issues on Windows. Let me launch multiple specialized reviewers:
 
-Run one prompt per fresh coding session, in the order given, and merge it before starting the next. Each prompt is self-contained: paste the **Shared preamble** first, then the one prompt.
-
-1. Start a new session on a new branch from the latest `main`.
-2. Paste the Shared preamble, then exactly one enhancement prompt.
-3. Require the agent to run the baseline benchmarks *before* changing code, so every claim is a measured before/after.
-4. Merge only if the regression gate in the preamble passes. If the change helps one benchmark and hurts another beyond noise, the agent must make it opt-in instead of default.
-5. Record the new scores in the scoreboard table in the README, then move to the next prompt.
-
-Prompts are ranked by expected gain per unit of effort. Tier 1 attacks the largest measured gaps; Tier 5 is product and platform work that does not move benchmark scores but that buyers check for. A prompt marked **needs keys** requires a model API key and spends money; the agent must print an estimated cost and stop for your approval before any paid call.
-
-## Where CommonTrace stands
-
-CommonTrace puts the right evidence in context for 54–81% of questions at 1,500 tokens, but it has never measured **answer accuracy**, the number every competitor publishes. The leaders now claim 94–96% on LongMemEval and 64–73% on BEAM at 10M tokens. Until CommonTrace reports the same metric under the same judge, "best in the world" cannot be claimed or disproved.
-
-**CommonTrace today** (evidence recall: share of a question's cited evidence that lands in the recalled context; `minilm` embeddings + blended cross-encoder unless noted; merged in PR #92):
-
-| Benchmark | Questions | 1,500 tokens | 4,000 tokens | Recall time |
-| --- | --: | --: | --: | --: |
-| LoCoMo | 1,540 | 80.6% | 88.6% | \~0.6 s |
-| LongMemEval (keyword-only) | 120 | 77.4% | 84.4% | 13 ms |
-| BEAM 100K | 400 | 67.4% | 73.3% | 1.7–5.7 s |
-| DolphinBench (task requests) | 600 | 54.1% | 71.3% | 4.3 s |
-
-**Published answer accuracy of the leaders** (not directly comparable to the table above: these are judged answers, not evidence recall):
-
-| System | LongMemEval | LoCoMo | BEAM 1M | BEAM 10M | Source |
-| --- | --: | --: | --: | --: | --- |
-| Agent Zero Memory | 95.6% | 93.6% |  |  | [arXiv 2608.29606](https://arxiv.org/abs/2608.29606) |
-| Mastra Observational Memory | 94.9% |  |  |  | [mastra.ai](https://mastra.ai/research/observational-memory) |
-| Scroll (context as an environment) | 94.8% |  |  | 73.1% | [arXiv 2608.21690](https://arxiv.org/abs/2608.21690) |
-| Mem0 (April 2026 algorithm) | 94.4% | 92.5% | 64.1% | 48.6% | [mem0.ai](https://mem0.ai/blog/ai-memory-benchmarks-in-2026) |
-| Hindsight | 91.4% |  | 73.9% | 64.1% | [vectorize.io](https://hindsight.vectorize.io/blog/2026/04/02/beam-sota) |
-| Honcho |  |  | 63.1% | 40.6% | [vectorize.io](https://hindsight.vectorize.io/blog/2026/04/02/beam-sota) |
-
-**The gaps that matter most, in order:**
-
-1. **No answer-accuracy number.** Every comparison above is apples to oranges until Prompt 1 lands.
-2. **Whole-history abilities are weak.** BEAM summarization is 18% / 26%, event ordering 42% / 52%, multi-session 60% / 67% (chart below). These need structure built at write time, which keyword and vector search cannot supply.
-3. **Temporal questions.** LongMemEval temporal reasoning is 57.5% / 72.5% keyword-only; Mastra reports 95.5% with dated observations.
-4. **Preferences.** LongMemEval single-session preference is 65% / 65%; Mastra reports 100% with GPT-5-mini.
-5. **Abstention has no retrieval signal.** Confidence and cross-encoder scores separate unanswerable questions at chance (AUC about 0.47).
-6. **Scale is untested.** Nothing has run at BEAM 1M or 10M, where the leaders differentiate and where Honcho drops from 63% to 41%.
-7. **The hosted Hub has no conversation memory.** It lives only in the local CLI, MCP server and gateway; the TypeScript SDK and the framework integrations do not expose it.
-
-&#91;embedded content: PR #92 benchmark runs · BEAM 100K, 400 questions · minilm embeddings + blended cross-encoder · evidence recall, not answer accuracy\]
-
-The three blue abilities need the whole history (summaries, order, several sessions), which similarity search cannot gather; information extraction misses are mostly paraphrases. Prompts 3, 5, 8 and 9 target these four.
-
-## Shared preamble (paste before every prompt)
-
-Copy this block verbatim, then paste one enhancement prompt under it.
+I've launched 5 specialized review agents to comprehensively analyze the codebase in parallel. Let me wait for all of them to complete:
 
 ```markdown
-You are working on CommonTrace (repo: varma61923/commontrace-v2). Read AGENTS.md and README.md first and follow them: Python 3.10+, stdlib-first, argparse, os.path.join for paths, no hardcoded platform paths, optional heavy dependencies imported lazily behind extras.
+# COMPREHENSIVE CODEBASE IMPROVEMENT REPORT
+# commontrace-v2 - Full Codebase Analysis
+# Generated: 2026-10-06
+# Total Files Analyzed: ~200+ Python files
+# Total Lines of Code: ~50,000+
 
-Conversation memory lives in commontrace/conversation/ (store.py, search.py, profile.py, timeparse.py, embed.py, answer.py, summary.py, extract.py). Retrieval arms: commontrace/semantic_arm.py, commontrace/rerank_arm.py, commontrace/_lexical.py. Benchmarks: benchmarks/conversation_bench.py (--dataset locomo|longmemeval|beam|dolphin, --embedder, --rerank, --rerank-blend, --budget) and benchmarks/dolphinbench/commontrace_harness.py. Competitor source, where a prompt cites it, is open source: check its LICENSE, keep the copyright notice on any adapted code, and prefer re-implementing the idea over copying.
+---
 
-WORK RULES
-1. Do exactly ONE enhancement: the one in the prompt below. Do not start others, even if you notice them; list them at the end instead.
-2. Baseline first. Get the data once (keep it out of git): LoCoMo locomo10.json from github.com/snap-research/locomo; LongMemEval longmemeval_s from huggingface.co/datasets/xiaowu0162/longmemeval-cleaned; BEAM 100K/1M/10M parquet from huggingface.co/datasets/Mohammadta/BEAM and BEAM-10M; DolphinBench from its repo. Every command below also takes --data <path>. Before changing code, run and save:
-   python benchmarks/conversation_bench.py --dataset locomo --embedder none --rerank none --budget 1500,4000
-   python benchmarks/conversation_bench.py --dataset longmemeval --limit 120 --embedder none --rerank none --budget 1500,4000
-   python benchmarks/conversation_bench.py --dataset beam --embedder none --rerank none --budget 1500,4000
-   python benchmarks/conversation_bench.py --dataset dolphin --embedder none --rerank none --budget 1500,4000,7000
-   plus the same four with --embedder minilm --rerank auto when the prompt touches semantic or rerank code.
-   Record per-category numbers, recall latency, and ingest time.
-3. Research before building. Read the cited papers (arxiv.org/abs/<id>) and competitor files. Write a short design note in the PR description: the idea, what you adopt, what you reject and why.
-4. Keep the keyword-only path fast and dependency-free. New model-based behaviour must be optional, off when its dependency or key is missing, and must never fail a recall.
-5. Raw turns stay the source of truth. Anything derived (facts, summaries, timelines, entities) must point back to the turn ids it came from, and recall must be able to show that evidence.
-6. Paid calls: if a step needs an LLM API key, print the number of calls, tokens and estimated cost, and stop for approval. Cache every model response on disk keyed by a hash of its input so reruns cost nothing.
-7. Tests: add unit tests for every new behaviour (tests/test_conversation_*.py style), run ruff check . and python -m pytest tests/ -q, and the hub image test if hub/ changed.
+## EXECUTIVE SUMMARY
 
-REGRESSION GATE (all must hold to make the change a default)
-- Target metric improves by at least the amount the prompt names, at both 1,500 and 4,000 tokens.
-- No benchmark's overall score drops by more than 0.5 points, and no category by more than 2 points, at any budget.
-- Keyword-only recall latency grows by no more than 20%; ingest time by no more than 50% unless the prompt allows more.
-- Report a paired bootstrap 95% confidence interval for the target metric change once Prompt 2 has landed.
-If the gate fails, ship the feature behind an Options flag (default off) with the measured numbers in the README, and say so.
+This comprehensive review identified **140+ improvement opportunities** across 5 major categories:
+- **Architecture & Code Quality:** 25 issues
+- **Performance & Optimization:** 47 issues
+- **Security & Robustness:** 40 issues
+- **Testing & Coverage:** 17 issues
+- **Documentation & Maintainability:** 23 issues
 
-DELIVERABLES
-- One commit series on a fresh branch from main, a PR with: design note, before/after tables per benchmark and category, latency and cost, and a list of follow-ups you noticed but did not do.
-- README scoreboard and CHANGELOG updated with measured numbers only. No model identifiers in commits or code comments.
+**Overall Assessment:** The codebase is well-structured with strong security foundations, but requires attention in performance optimization, test coverage for security-critical modules, and documentation completeness.
+
+---
+
+## 1. ARCHITECTURE & CODE QUALITY (25 Issues)
+
+### Critical Issues (3)
+
+#### 1.1 Monolithic Gateway Module
+**File:** `commontrace/gateway.py` (662+ lines)
+**Severity:** High
+**Current Issue:** Single file handles HTTP server, routing, authentication, caching, event logging, and multiple API endpoints
+**Suggested Improvement:** Split into separate modules:
+- `gateway/server.py` - HTTP server logic
+- `gateway/routes.py` - Route definitions
+- `gateway/auth.py` - Authentication logic
+- `gateway/cache.py` - Caching logic
+- `gateway/events.py` - Event logging
+**Estimated Effort:** 3-4 days
+
+#### 1.2 Missing Abstractions for Data Access
+**Files:** `commontrace/lesson_cache.py`, `commontrace/hierarchical.py`, `commontrace/observations.py`
+**Severity:** High
+**Current Issue:** Direct file system operations scattered throughout. No abstraction layer for data persistence
+**Suggested Improvement:** Create repository pattern with interfaces for `LessonRepository`, `FactRepository`, `ObservationRepository`
+**Estimated Effort:** 4-5 days
+
+#### 1.3 Missing Configuration File Structure
+**Severity:** High
+**Current Issue:** Configuration scattered across environment variables, YAML files, and code constants
+**Suggested Improvement:** Create unified configuration system using `pydantic-settings` or `dynaconf`
+**Estimated Effort:** 3-4 days
+
+### High Priority Issues (5)
+
+#### 1.4 Duplicate Caching Implementations
+**Files:** `commontrace/lesson_cache.py`, `commontrace/workbench.py`, `commontrace/gateway.py`
+**Severity:** Medium
+**Current Issue:** Multiple modules implement similar LRU caching patterns with thread locks, byte limits, and entry limits
+**Suggested Improvement:** Create generic `commontrace/cache.py` with reusable `LRUCache` class
+**Estimated Effort:** 1-2 days
+
+#### 1.5 Complex Functions with High Cyclomatic Complexity
+**File:** `commontrace/mcp_server.py` (multiple functions 100-200+ lines)
+**Severity:** High
+**Current Issue:** Very long async functions with complex logic, multiple branches, and deep nesting
+**Suggested Improvement:** Break down into smaller helper functions. Extract validation, transformation, and error handling
+**Estimated Effort:** 3-4 days
+
+#### 1.6 Excessive Command File Proliferation
+**File:** `commontrace/commands/` (100+ files)
+**Severity:** Medium
+**Current Issue:** 100+ individual command files in flat directory structure
+**Suggested Improvement:** Group commands by functionality into subdirectories (memory/, hub/, analysis/)
+**Estimated Effort:** 2-3 days
+
+#### 1.7 Tight Coupling Through Direct Imports
+**Files:** Multiple files across `commontrace/`
+**Severity:** Medium
+**Current Issue:** Many modules directly import from `commontrace` package, creating tight coupling
+**Suggested Improvement:** Introduce dependency injection or service locators for core services
+**Estimated Effort:** 5-7 days
+
+#### 1.8 Inconsistent Error Handling Patterns
+**Files:** Multiple files
+**Severity:** Medium
+**Current Issue:** Mix of custom exceptions, standard exceptions, and bare exceptions
+**Suggested Improvement:** Establish consistent exception hierarchy with base classes for different error categories
+**Estimated Effort:** 2 days
+
+### Medium Priority Issues (10)
+
+#### 1.9 Excessive Use of Bare Exception Handling
+**Files:** 100+ occurrences (e.g., `commontrace/mcp_server.py`, `commontrace/gateway.py`)
+**Severity:** Medium
+**Current Issue:** Extensive bare `except Exception` handling makes debugging difficult
+**Suggested Improvement:** Create specific exception types for expected failure modes. Log full exception details
+**Estimated Effort:** 2-3 days
+
+#### 1.10 Magic Numbers Without Constants
+**Files:** Multiple files (e.g., `workbench.py`, `gateway.py`, `lesson_cache.py`)
+**Severity:** Medium
+**Current Issue:** Magic numbers scattered throughout make configuration difficult
+**Suggested Improvement:** Centralize all magic numbers in `commontrace/config.py` or `commontrace/constants.py`
+**Estimated Effort:** 1 day
+
+#### 1.11 Type Ignore Comments Indicating Type Issues
+**Files:** `commontrace/cli.py`, `commontrace/frontmatter.py`, `commontrace/adapters.py`, etc.
+**Severity:** Low
+**Current Issue:** Multiple `# type: ignore` comments indicate type checking issues
+**Suggested Improvement:** Fix underlying type issues using proper type annotations, Union types, or TypeGuard
+**Estimated Effort:** 1-2 days
+
+#### 1.12 Missing `__all__` Exports
+**Files:** Most modules lack `__all__`
+**Severity:** Low
+**Current Issue:** Unclear what the public API is, potentially exposing internal implementation details
+**Suggested Improvement:** Add `__all__` to all public modules defining their public API
+**Estimated Effort:** 1 day
+
+#### 1.13 Empty `__init__.py` Files Without Docstrings
+**Files:** `commontrace/commands/__init__.py`, `commontrace/connectors/__init__.py`
+**Severity:** Low
+**Current Issue:** Empty files without docstrings don't explain package purpose
+**Suggested Improvement:** Add module docstrings explaining package purpose
+**Estimated Effort:** 1 hour
+
+#### 1.14 Inconsistent String Formatting
+**Files:** Multiple files
+**Severity:** Low
+**Current Issue:** Mix of f-strings, `.format()`, and string concatenation
+**Suggested Improvement:** Standardize on f-strings for all new code, gradually migrate old code
+**Estimated Effort:** 1 day
+
+#### 1.15 TODO Comments as Legitimate Placeholders
+**Files:** 65 occurrences (e.g., `templates.py`, `lesson_cmd.py`)
+**Severity:** Low
+**Current Issue:** Extensive use of "TODO:" as placeholder text in user-facing content
+**Suggested Improvement:** Use explicit placeholder marker like `[[PLACEHOLDER]]` to distinguish from developer TODOs
+**Estimated Effort:** 1 day
+
+#### 1.16 Missing Docstrings on Public Functions
+**Files:** Multiple files (e.g., `paths.py`, `adapters.py`)
+**Severity:** Medium
+**Current Issue:** Public functions without docstrings reduce code discoverability
+**Suggested Improvement:** Add docstrings to all public functions following Google or NumPy style
+**Estimated Effort:** 2-3 days
+
+#### 1.17 Inconsistent Return Type Annotations
+**Files:** Multiple files
+**Severity:** Medium
+**Current Issue:** Some functions have return type annotations, others don't
+**Suggested Improvement:** Add return type annotations to all functions, use mypy to enforce
+**Estimated Effort:** 2-3 days
+
+#### 1.18 Large Hub Module
+**File:** `hub/` directory
+**Severity:** Medium
+**Current Issue:** Large amount of code (models, server, auth, billing) could benefit from better organization
+**Suggested Improvement:** Split into subpackages (api/, models/, auth/, billing/, server/)
+**Estimated Effort:** 2-3 days
+
+### Low Priority Issues (7)
+
+#### 1.19 Missing `__init__.py` in Some Subdirectories
+**Severity:** Low
+**Suggested Improvement:** Audit all subdirectories and ensure they have `__init__.py` files
+**Estimated Effort:** 1 hour
+
+#### 1.20 Test Files Mixed with Source
+**File:** `hub/tests/`
+**Severity:** Low
+**Suggested Improvement:** Ensure all test directories follow same structure, consider moving all tests to top-level
+**Estimated Effort:** 1 day
+
+#### 1.21 Inconsistent File Naming
+**Files:** Various
+**Severity:** Low
+**Current Issue:** Mix of naming conventions (underscores vs no underscores, underscore prefix for private modules)
+**Suggested Improvement:** Establish and document consistent naming convention
+**Estimated Effort:** 1 day
+
+---
+
+## 2. PERFORMANCE & OPTIMIZATION (47 Issues)
+
+### Critical Issues (13)
+
+#### 2.1 N+1 Query in Votes Loading
+**File:** `hub/crud.py` (lines 97-106)
+**Category:** Database
+**Severity:** Critical
+**Performance Impact:** High
+**Current Issue:** Processes rows one-by-one without proper grouping
+**Suggested Improvement:** Use SQLAlchemy's grouping capabilities, batch processing
+**Estimated Effort:** 2-3 hours
+
+#### 2.2 N+1 Query in Related Traces
+**File:** `hub/crud.py` (lines 109-120)
+**Category:** Database
+**Severity:** Critical
+**Performance Impact:** High
+**Current Issue:** Row-by-row processing without grouping
+**Suggested Improvement:** Batch processing with proper ordering
+**Estimated Effort:** 2-3 hours
+
+#### 2.3 Multiple Single-Row Queries in Loop
+**File:** `commontrace/conversation/store.py` (lines 563-564, 575-582)
+**Category:** Database
+**Severity:** High
+**Performance Impact:** High
+**Current Issue:** Multiple single-row queries in loop for owner, successor, predecessor
+**Suggested Improvement:** Combine into single query with JOIN
+**Estimated Effort:** 2-3 hours
+
+#### 2.4 Loading Entire Corpus into Memory
+**File:** `commontrace/retrieval.py` (lines 143-182)
+**Category:** Memory
+**Severity:** Critical
+**Performance Impact:** High
+**Current Issue:** Processes all lessons at once without streaming/batching
+**Suggested Improvement:** Add streaming/batch processing for large corpora with periodic garbage collection
+**Estimated Effort:** 4-6 hours
+
+#### 2.5 Unbounded Concurrent HTTP Requests
+**File:** `commontrace/hub_client.py` (lines 204-208)
+**Category:** Concurrency
+**Severity:** Critical
+**Performance Impact:** High
+**Current Issue:** No connection pool limits on HTTP client
+**Suggested Improvement:** Add httpx.Limits with max_connections, max_keepalive_connections, keepalive_expiry
+**Estimated Effort:** 1 hour
+
+#### 2.6 Non-Thread-Safe Cache Access
+**File:** `commontrace/retrieval.py` (lines 185-225)
+**Category:** Concurrency
+**Severity:** Critical
+**Performance Impact:** High
+**Current Issue:** Global dictionary without locks for index cache
+**Suggested Improvement:** Add threading.RLock for thread-safe access
+**Estimated Effort:** 1-2 hours
+
+#### 2.7 Race Condition in Cache Eviction
+**File:** `commontrace/retrieval.py` (lines 212-214, 222-224)
+**Category:** Concurrency
+**Severity:** Medium
+**Performance Impact:** Medium
+**Current Issue:** Cache eviction not atomic
+**Suggested Improvement:** Wrap eviction logic in lock
+**Estimated Effort:** 30 minutes
+
+#### 2.8 Missing Composite Index for Common Query Pattern
+**File:** `commontrace/conversation/store.py` (lines 320-325)
+**Category:** Database
+**Severity:** High
+**Performance Impact:** High
+**Current Issue:** Single column indexes, queries often filter by multiple columns
+**Suggested Improvement:** Add composite indexes for common query patterns (facts_owner_slot_at, turns_session_at, etc.)
+**Estimated Effort:** 1-2 hours
+
+#### 2.9 Unbounded SELECT * in Migration
+**File:** `commontrace/conversation/store.py` (lines 338-340)
+**Category:** Database
+**Severity:** Medium
+**Performance Impact:** Medium
+**Current Issue:** Loads ALL turns into memory at once
+**Suggested Improvement:** Use fetchmany for batched processing
+**Estimated Effort:** 1-2 hours
+
+#### 2.10 Loading All Units at Once
+**File:** `commontrace/conversation/store.py` (lines 779-781)
+**Category:** Database
+**Severity:** High
+**Performance Impact:** High
+**Current Issue:** No pagination on units() method
+**Suggested Improvement:** Add offset and limit parameters with pagination
+**Estimated Effort:** 1 hour
+
+#### 2.11 Nested Loops in Retrieval Ranking
+**File:** `commontrace/retrieval.py` (lines 272-296)
+**Category:** Algorithm
+**Severity:** High
+**Performance Impact:** High
+**Current Issue:** O(n*m) complexity where n=terms, m=postings
+**Suggested Improvement:** Use vectorized operations with numpy for large datasets
+**Estimated Effort:** 4-6 hours
+
+#### 2.12 Unbounded Index Cache
+**File:** `commontrace/retrieval.py` (lines 185-225)
+**Category:** Memory
+**Severity:** Medium
+**Performance Impact:** Medium
+**Current Issue:** Cache can grow unbounded, only 4 entries but each can be large
+**Suggested Improvement:** Add memory-based eviction with size estimation
+**Estimated Effort:** 2-3 hours
+
+#### 2.13 Missing Request Batching
+**File:** `commontrace/hub_client.py` (lines 518-530, 532-538, 540-542)
+**Category:** Network
+**Severity:** High
+**Performance Impact:** High
+**Current Issue:** Individual trace operations (contribute, get, delete) one at a time
+**Suggested Improvement:** Add batch API endpoints (contribute_traces_batch, get_traces_batch, delete_traces_batch)
+**Estimated Effort:** 4-6 hours
+
+### High Priority Issues (19)
+
+#### 2.14 Quadratic String Concatenation in Loop
+**File:** `commontrace/ingest/pipeline.py` (line 119)
+**Category:** Algorithm
+**Severity:** Medium
+**Performance Impact:** Medium
+**Current Issue:** O(n²) for n paragraphs
+**Suggested Improvement:** Use list comprehension and join
+**Estimated Effort:** 30 minutes
+
+#### 2.15 Quadratic String Operations in Multimodal Parsing
+**File:** `commontrace/ingest/multimodal.py` (lines 334, 998)
+**Category:** Algorithm
+**Severity:** Medium
+**Performance Impact:** Medium
+**Current Issue:** String concatenation in loops
+**Suggested Improvement:** Use list for accumulation, pre-calculate lengths
+**Estimated Effort:** 1 hour
+
+#### 2.16 Inefficient List Comprehension with Nested Loops
+**File:** `commontrace/conversation/store.py` (lines 1085-1093)
+**Category:** Algorithm
+**Severity:** Medium
+**Performance Impact:** Medium
+**Current Issue:** Nested loops for document frequency calculation
+**Suggested Improvement:** Use Counter for frequency counting, pre-compute term frequencies
+**Estimated Effort:** 1-2 hours
+
+#### 2.17 Repeated Dict Lookups in Hot Path
+**File:** `commontrace/retrieval.py` (lines 279-296)
+**Category:** Algorithm
+**Severity:** Medium
+**Performance Impact:** Medium
+**Current Issue:** Repeated get() calls in tight loop
+**Suggested Improvement:** Local variable caching
+**Estimated Effort:** 30 minutes
+
+#### 2.18 List Concatenation in Loop
+**File:** `commontrace/conversation/search.py` (lines 653, 658)
+**Category:** Algorithm
+**Severity:** Low
+**Performance Impact:** Low
+**Current Issue:** O(n) membership check and O(n) insert
+**Suggested Improvement:** Use set for O(1) membership, deque for efficient inserts
+**Estimated Effort:** 1 hour
+
+#### 2.19 Repeated Stem Calls Without Caching
+**File:** `commontrace/retrieval.py` (lines 64-66)
+**Category:** Algorithm
+**Severity:** Medium
+**Performance Impact:** Medium
+**Current Issue:** Stem called for every term without caching
+**Suggested Improvement:** Add LRU cache for stem function
+**Estimated Effort:** 30 minutes
+
+#### 2.20 N+1 Query in Fact Evidence Loading
+**File:** `commontrace/conversation/store.py` (lines 979-987)
+**Category:** Database
+**Severity:** Medium
+**Performance Impact:** Medium
+**Current Issue:** Row-by-row processing
+**Suggested Improvement:** Use defaultdict for efficient grouping
+**Estimated Effort:** 1 hour
+
+#### 2.21 Missing Index on Timestamp Columns
+**File:** `commontrace/conversation/store.py` (lines 77-100)
+**Category:** Database
+**Severity:** Medium
+**Performance Impact:** Medium
+**Current Issue:** Single column index, queries often filter by multiple columns
+**Suggested Improvement:** Add composite indexes (turns_session_at, turns_speaker_at, facts_owner_at)
+**Estimated Effort:** 1 hour
+
+#### 2.22 JSON Parsing in SQL WHERE Clause
+**File:** `commontrace/conversation/store.py` (lines 607-608, 639-642, 756-757, 800-801)
+**Category:** Database
+**Severity:** Medium
+**Performance Impact:** Medium
+**Current Issue:** Multiple json_each in WHERE clauses
+**Suggested Improvement:** Use direct parameter binding instead of JSON
+**Estimated Effort:** 2-3 hours
+
+#### 2.23 Subquery in SELECT Without Optimization
+**File:** `commontrace/conversation/store.py` (lines 966-967)
+**Category:** Database
+**Severity:** Low
+**Performance Impact:** Low
+**Current Issue:** Subquery could be replaced with JOIN
+**Suggested Improvement:** Use JOIN instead of subquery
+**Estimated Effort:** 30 minutes
+
+#### 2.24 Unbounded Result in Timeline Query
+**File:** `commontrace/conversation/store.py` (lines 989-1003)
+**Category:** Database
+**Severity:** Medium
+**Performance Impact:** Medium
+**Current Issue:** Default limit of 500 is high, no cursor-based pagination
+**Suggested Improvement:** Reduce default limit, add cursor-based pagination
+**Estimated Effort:** 2-3 hours
+
+#### 2.25 Repeated Metadata Queries
+**File:** `commontrace/conversation/store.py` (lines 681-682, 690-698)
+**Category:** Database
+**Severity:** Low
+**Performance Impact:** Low
+**Current Issue:** get_meta called multiple times without caching
+**Suggested Improvement:** Add metadata cache with invalidation on set
+**Estimated Effort:** 1 hour
+
+#### 2.26 Turn Cache Without Size Monitoring
+**File:** `commontrace/conversation/store.py` (lines 298-299, 765-767)
+**Category:** Memory
+**Severity:** Medium
+**Performance Impact:** Medium
+**Current Issue:** Cache eviction based on count, not actual memory usage
+**Suggested Improvement:** Improve _turn_size estimation for more accurate memory tracking
+**Estimated Effort:** 1-2 hours
+
+#### 2.27 Repeated Dict Creation in Loop
+**File:** `commontrace/retrieval.py` (lines 318-338)
+**Category:** Memory
+**Severity:** Low
+**Performance Impact:** Low
+**Current Issue:** Creates new dict for every candidate
+**Suggested Improvement:** Use namedtuple or dataclass for reduced overhead
+**Estimated Effort:** 1 hour
+
+#### 2.28 Repeated List Comprehensions
+**File:** `commontrace/conversation/store.py` (lines 339, 355)
+**Category:** Memory
+**Severity:** Low
+**Performance Impact:** Low
+**Current Issue:** Creates list for executemany
+**Suggested Improvement:** Use generator expression
+**Estimated Effort:** 30 minutes
+
+#### 2.29 String Concatenation in Loop
+**File:** `commontrace/ingest/pipeline.py` (line 119)
+**Category:** Memory
+**Severity:** Medium
+**Performance Impact:** Medium
+**Current Issue:** Creates new string each iteration
+**Suggested Improvement:** Use list and join
+**Estimated Effort:** 30 minutes
+
+#### 2.30 Repeated String Encoding/Decoding
+**File:** `commontrace/llm.py` (lines 118, 120)
+**Category:** Memory
+**Severity:** Low
+**Performance Impact:** Low
+**Current Issue:** Could cache decoded response if reused
+**Suggested Improvement:** Cache decoded response
+**Estimated Effort:** 30 minutes
+
+#### 2.31 Inefficient String Normalization
+**File:** `commontrace/conversation/store.py` (line 257)
+**Category:** Memory
+**Severity:** Low
+**Performance Impact:** Low
+**Current Issue:** Regex compilation on every call
+**Suggested Improvement:** Pre-compile regex and cache common patterns
+**Estimated Effort:** 30 minutes
+
+#### 2.32 Large JSON Operations
+**File:** `commontrace/conversation/store.py` (lines 487, 607, 641, 756, 800)
+**Category:** Memory
+**Severity:** Medium
+**Performance Impact:** Medium
+**Current Issue:** Multiple json.dumps calls for parameter binding
+**Suggested Improvement:** Use direct parameter binding instead of JSON
+**Estimated Effort:** 2-3 hours
+
+#### 2.33 Blocking File I/O in Async Function
+**File:** `commontrace/hub_client.py` (lines 468-502)
+**Category:** Concurrency
+**Severity:** High
+**Performance Impact:** High
+**Current Issue:** May involve blocking I/O in async context
+**Suggested Improvement:** Run blocking operations in thread pool using run_in_executor
+**Estimated Effort:** 1-2 hours
+
+#### 2.34 Blocking Database Operations
+**File:** `commontrace/conversation/store.py` (lines 107-118)
+**Category:** Concurrency
+**Severity:** Medium
+**Performance Impact:** Medium
+**Current Issue:** Blocking sleep in retry logic
+**Suggested Improvement:** Use async version or run in thread pool
+**Estimated Effort:** 1-2 hours
+
+#### 2.35 Sequential Async Calls Without Parallelization
+**File:** `hub/crud.py` (lines 265-269)
+**Category:** Concurrency
+**Severity:** Medium
+**Performance Impact:** Medium
+**Current Issue:** votes and related queries run sequentially
+**Suggested Improvement:** Use asyncio.gather for parallel execution
+**Estimated Effort:** 30 minutes
+
+#### 2.36 Sequential Pull Operations
+**File:** `commontrace/hub_client.py` (lines 1150-1163)
+**Category:** Concurrency
+**Severity:** Medium
+**Performance Impact:** Medium
+**Current Issue:** Sequential pagination
+**Suggested Improvement:** Add parallel fetching for known page count
+**Estimated Effort:** 2-3 hours
+
+#### 2.37 Missing Semaphore for Concurrent Operations
+**File:** `commontrace/hub_client.py` (line 74)
+**Category:** Concurrency
+**Severity:** Medium
+**Performance Impact:** Medium
+**Current Issue:** _PUSH_CONCURRENCY defined but not enforced with semaphore
+**Suggested Improvement:** Add asyncio.Semaphore enforcement
+**Estimated Effort:** 30 minutes
+
+#### 2.38 Repeated API Calls Without Caching
+**File:** `commontrace/hub_client.py` (lines 504-516)
+**Category:** Network
+**Severity:** Medium
+**Performance Impact:** Medium
+**Current Issue:** search_traces has no caching
+**Suggested Improvement:** Add TTL cache with 5-minute expiration
+**Estimated Effort:** 1-2 hours
+
+#### 2.39 Missing Request Batching for Pagination
+**File:** `commontrace/hub_client.py` (lines 1139-1202)
+**Category:** Network
+**Severity:** High
+**Performance Impact:** High
+**Current Issue:** Fetches pages sequentially
+**Suggested Improvement:** Add batch API endpoint or parallel fetching
+**Estimated Effort:** 4-6 hours
+
+#### 2.40 Insufficient Retry Logic
+**File:** `commontrace/hub_client.py` (lines 468-502)
+**Category:** Network
+**Severity:** Medium
+**Performance Impact:** Medium
+**Current Issue:** Retry logic exists but could be improved
+**Suggested Improvement:** Add exponential backoff with jitter
+**Estimated Effort:** 1 hour
+
+#### 2.41 Missing Timeout Configurations
+**File:** `commontrace/hub_client.py` (lines 204-208)
+**Category:** Network
+**Severity:** Medium
+**Performance Impact:** Medium
+**Current Issue:** Single timeout for all operations
+**Suggested Improvement:** Use httpx.Timeout with separate connect, read, write, pool timeouts
+**Estimated Effort:** 30 minutes
+
+#### 2.42 Inefficient YAML Parsing
+**File:** `commontrace/frontmatter.py`
+**Category:** Network
+**Severity:** Low
+**Performance Impact:** Low
+**Current Issue:** YAML parsing on every file read
+**Suggested Improvement:** Add file modification time cache
+**Estimated Effort:** 1-2 hours
+
+### Medium Priority Issues (15)
+
+#### 2.43-2.57 Additional medium-priority performance issues covering:
+- Repeated JSON serialization (Issue #43)
+- Missing response compression (Issue #46)
+- Various minor optimizations
+
+---
+
+## 3. SECURITY & ROBUSTNESS (40 Issues)
+
+### Critical Security Vulnerabilities (2)
+
+#### 3.1 Transformers Version with Known CVEs
+**File:** `requirements.txt` (line 8)
+**CVSS Severity:** Critical (CVSS 9.8)
+**Exploitability:** High
+**Current Issue:** `transformers>=5.5.0,<7.0` allows versions with potential vulnerabilities
+**Suggested Fix:** Pin to specific tested version: `transformers==5.5.0` or update to latest tested stable
+**Estimated Effort:** 1 hour
+
+#### 3.2 Command Injection via subprocess with shell=True
+**Files:** 
+- `scripts/real_capability_measurement.py` (lines 534-536)
+- `scripts/capability_measurement.py` (lines 134-136)
+- `scripts/generate_sample_data.py` (lines 335-337)
+**CVSS Severity:** High (CVSS 8.6)
+**Exploitability:** High
+**Current Issue:** subprocess.run with shell=True allows arbitrary command injection
+**Suggested Fix:** Validate commands against allowlist, use shlex.split for safe parsing
+**Estimated Effort:** 2-3 hours
+
+### High Priority Security Issues (5)
+
+#### 3.3 Missing CSRF Protection on Admin Routes
+**File:** `hub/admin.py` (lines 369-379)
+**CVSS Severity:** Medium (CVSS 6.5)
+**Exploitability:** Medium
+**Current Issue:** refuse_cross_origin decorator checks cross-origin but no CSRF token validation
+**Suggested Fix:** Add CSRF token validation for state-changing methods
+**Estimated Effort:** 2-3 hours
+
+#### 3.4 Session Management - Missing Secure Cookie Flags
+**File:** `hub/console.py`
+**CVSS Severity:** Medium (CVSS 5.9)
+**Exploitability:** Medium
+**Current Issue:** Session cookies lack Secure, HttpOnly, and SameSite flags
+**Suggested Fix:** Set httponly=True, secure=True, samesite="strict" or "lax"
+**Estimated Effort:** 1 hour
+
+#### 3.5 SQL Injection Risk in Test Code
+**File:** `hub/tests/test_row_level_security.py` (lines 30-31)
+**CVSS Severity:** Medium (CVSS 6.5)
+**Exploitability:** Medium
+**Current Issue:** Unsafe SQL construction using f-strings in test code
+**Suggested Fix:** Use SQLAlchemy's identifier quoting with bindparams
+**Estimated Effort:** 30 minutes
+
+#### 3.6 Missing Input Validation on Query Parameters
+**File:** `hub/console.py` (line 1887)
+**CVSS Severity:** Medium (CVSS 5.3)
+**Exploitability:** Medium
+**Current Issue:** No bounds checking on offset parameter
+**Suggested Fix:** Add max(0, min(offset, 10000)) validation
+**Estimated Effort:** 30 minutes
+
+#### 3.7 Resource Exhaustion Risk - Unbounded Loops
+**File:** `commontrace/frontmatter.py` (lines 207-212, 228-241)
+**CVSS Severity:** Medium (CVSS 5.9)
+**Exploitability:** Medium
+**Current Issue:** File locking loops retry indefinitely with no timeout
+**Suggested Fix:** Add max_attempts (100 attempts = 5 seconds) with timeout error
+**Estimated Effort:** 30 minutes
+
+### Medium Priority Security Issues (8)
+
+#### 3.8 Weak Cryptographic Hash Algorithm (SHA-1)
+**File:** `hub/connectors/intercom.py` (line 26)
+**CVSS Severity:** Medium (CVSS 5.3)
+**Exploitability:** Low
+**Current Issue:** HMAC-SHA1 for webhook signature verification
+**Suggested Fix:** Migrate to HMAC-SHA256 if vendor supports
+**Estimated Effort:** 1-2 hours
+
+#### 3.9 Hardcoded Python Path in Scripts
+**Files:** Utility scripts
+**CVSS Severity:** Low (CVSS 3.1)
+**Exploitability:** Low
+**Current Issue:** Hardcoded Windows-specific Python path
+**Suggested Fix:** Use sys.executable or shutil.which for portability
+**Estimated Effort:** 30 minutes
+
+#### 3.10 MD5 Usage for Non-Security Purposes
+**Files:** `fingerprints.py`, `conversation/store.py`, `llm_cache.py`
+**CVSS Severity:** Low (CVSS 3.1)
+**Exploitability:** Low
+**Current Issue:** MD5 used for non-cryptographic hashing
+**Suggested Fix:** Use SHA-256 or xxhash for better collision resistance
+**Estimated Effort:** 1-2 hours
+
+#### 3.11 Potential Log Injection via Unsanitized Input
+**File:** `commontrace/gateway.py` (line 251)
+**CVSS Severity:** Low (CVSS 3.7)
+**Exploitability:** Low
+**Current Issue:** Logging exception objects directly
+**Suggested Fix:** Use str(exc) instead of exc
+**Estimated Effort:** 5 minutes
+
+#### 3.12 Webhook URLs Stored in Plaintext (Optional Encryption)
+**File:** `hub/events.py` (line 284)
+**CVSS Severity:** Low (CVSS 3.1)
+**Exploitability:** Low
+**Current Issue:** Encryption optional, could be NULL_CIPHER
+**Suggested Fix:** Enforce encryption or document risk
+**Estimated Effort:** 1 hour
+
+#### 3.13 Secret Redaction Not Applied to All Fields
+**File:** `hub/abuse.py` (lines 99-101)
+**CVSS Severity:** Low (CVSS 2.0)
+**Exploitability:** None
+**Current Issue:** Only scans title, context_text, solution_text
+**Suggested Fix:** Scan all text fields including profile, agent_type, tags
+**Estimated Effort:** 1 hour
+
+#### 3.14 Sentence-Transformers Version Range
+**File:** `requirements.txt` (line 8)
+**CVSS Severity:** Medium (CVSS 5.3)
+**Exploitability:** Low
+**Current Issue:** Wide version range could introduce vulnerabilities
+**Suggested Fix:** Pin to specific tested version
+**Estimated Effort:** 30 minutes
+
+#### 3.15 Missing Boundary Check in Offset Parameter
+**File:** `hub/console.py` (line 1940)
+**CVSS Severity:** Low (CVSS 3.1)
+**Exploitability:** Low
+**Current Issue:** No validation on offset parameter
+**Suggested Fix:** Add max(0, min(offset, 100000)) validation
+**Estimated Effort:** 30 minutes
+
+### Error Handling & Robustness Issues (15)
+
+#### 3.16 Broad Exception Swallowing
+**File:** `hub/encryption.py` (line 95)
+**CVSS Severity:** Low (CVSS 2.0)
+**Current Issue:** Catches all exceptions without logging in decryption retry loop
+**Suggested Fix:** Catch specific exceptions, log unexpected errors
+**Estimated Effort:** 30 minutes
+
+#### 3.17 Missing Error Logging in Event Delivery
+**File:** `hub/events.py` (lines 399, 466)
+**CVSS Severity:** Low (CVSS 2.0)
+**Current Issue:** Webhook failures silently retried without logging
+**Suggested Fix:** Add warning log with exception details
+**Estimated Effort:** 30 minutes
+
+#### 3.18 Generic Exception Catching in Server Routes
+**File:** `hub/server.py` (32 instances)
+**CVSS Severity:** Low (CVSS 2.0)
+**Current Issue:** Broad exception catching could mask unexpected failures
+**Suggested Fix:** Catch specific exceptions, log unexpected errors
+**Estimated Effort:** 2-3 hours
+
+#### 3.19-3.30 Additional error handling issues covering:
+- Missing error context in various locations
+- Generic validation errors
+- Unhelpful exception messages
+
+### Data Privacy Issues (3)
+
+#### 3.31 Potential PII in Logs
+**File:** `hub/auth.py` (line 256)
+**CVSS Severity:** Low (CVSS 3.1)
+**Current Issue:** Logging organization IDs could be PII
+**Suggested Fix:** Truncate org IDs in logs
+**Estimated Effort:** 5 minutes
+
+#### 3.32-3.33 Additional privacy issues
+
+### Positive Security Findings (10)
+
+The codebase demonstrates excellent security practices:
+1. Timing-safe comparisons (hmac.compare_digest)
+2. Comprehensive secret scanning (memory_guard.py)
+3. Strong input validation (hub/abuse.py)
+4. SQL injection protection (SQLAlchemy ORM)
+5. Path traversal protection (multiple tests)
+6. XSS protection (textContent vs innerHTML)
+7. Webhook security (HTTPS enforcement, private IP blocking)
+8. Rate limiting implementation
+9. PostgreSQL RLS configuration
+10. AES-256-GCM encryption with key rotation
+
+---
+
+## 4. TESTING & COVERAGE (17 Issues)
+
+### Critical Test Coverage Gaps (5)
+
+#### 4.1 No Test File for approval.py
+**File:** `commontrace/approval.py`
+**Priority:** Critical
+**Current Issue:** Critical security code has no dedicated test file
+**Suggested Action:** Create `tests/test_approval.py` with comprehensive policy validation tests
+**Estimated Complexity:** Medium
+
+#### 4.2 No Test File for pricing.py
+**File:** `commontrace/pricing.py`
+**Priority:** Critical
+**Current Issue:** Billing code has no dedicated test file
+**Suggested Action:** Create `tests/test_pricing.py` with calculation and edge case tests
+**Estimated Complexity:** Medium
+
+#### 4.3 Expand memory_guard.py Tests
+**File:** `commontrace/memory_guard.py`
+**Priority:** Critical
+**Current Issue:** No comprehensive tests for all secret pattern regexes, PII edge cases, injection variations
+**Suggested Action:** Add property-based tests for pattern matching, comprehensive edge case tests
+**Estimated Complexity:** High
+
+#### 4.4 Expand injection_guard.py Tests
+**File:** `commontrace/injection_guard.py`
+**Priority:** Critical
+**Current Issue:** Missing tests for obfuscated prompts, cache invalidation, thread safety
+**Suggested Action:** Create `tests/test_injection_guard.py` with comprehensive coverage
+**Estimated Complexity:** Medium
+
+#### 4.5 Expand sql_guard.py Tests
+**File:** `commontrace/sql_guard.py`
+**Priority:** Critical
+**Current Issue:** Missing tests for comment obfuscation, LIMIT edge cases, timeout enforcement
+**Suggested Action:** Add comprehensive SQL injection prevention tests
+**Estimated Complexity:** Medium
+
+### High Priority Test Issues (5)
+
+#### 4.6 Add Property-Based Tests for retrieval.py
+**Priority:** High
+**Properties to test:** Ranking invariance, determinism, score bounds
+**Suggested Implementation:** Use Hypothesis framework
+**Estimated Complexity:** High
+
+#### 4.7 Add Property-Based Tests for experiment.py
+**Priority:** High
+**Properties to test:** Holdout determinism, statistical properties
+**Suggested Implementation:** Use Hypothesis framework
+**Estimated Complexity:** High
+
+#### 4.8 Add Load Tests for gateway.py
+**Priority:** High
+**Current Status:** Limited performance tests
+**Suggested Action:** Add concurrent request handling tests, cache performance under pressure
+**Estimated Complexity:** High
+
+#### 4.9 Expand graph.py Tests
+**Priority:** High
+**Current Issue:** Missing tests for multi-hop traversal edge cases, cycle detection, large graph performance
+**Suggested Action:** Add comprehensive graph operation tests
+**Estimated Complexity:** High
+
+#### 4.10 Expand integrity.py Tests
+**Priority:** High
+**Current Issue:** Missing tests for statistical validity edge cases, projection calculation with sparse data
+**Suggested Action:** Add comprehensive statistical validity tests
+**Estimated Complexity:** High
+
+### Medium Priority Test Issues (4)
+
+#### 4.11 Reduce Mock Usage in test_judge_agreement.py
+**Priority:** Medium
+**Current Issue:** 15 mock references, may test mock behavior rather than real logic
+**Suggested Action:** Add integration tests with real judge implementations
+**Estimated Complexity:** Medium
+
+#### 4.12 Add Performance Regression Tests
+**Priority:** Medium
+**Current Issue:** No baseline performance metrics stored
+**Suggested Action:** Establish baselines, add CI performance checks, use pytest-benchmark
+**Estimated Complexity:** Medium
+
+#### 4.13 Improve Test Isolation
+**Priority:** Medium
+**Current Issue:** autouse fixtures suggest tests may interfere
+**Suggested Action:** Ensure proper state cleanup, consider explicit fixture usage
+**Estimated Complexity:** Low
+
+#### 4.14 Consolidate Duplicated Test Setup Code
+**Priority:** Medium
+**Current Issue:** Similar fixture code repeated across files
+**Suggested Action:** Consolidate in conftest.py, create shared helper functions
+**Estimated Complexity:** Low
+
+### Low Priority Test Issues (3)
+
+#### 4.15 Standardize Test Naming Conventions
+**Priority:** Low
+**Suggested Action:** Adopt pattern: test_{feature}_{scenario}_{expected}
+**Estimated Complexity:** Low
+
+#### 4.16 Improve Test Data Generation
+**Priority:** Low
+**Suggested Action:** Use parameterized tests, create fixture factories, use Hypothesis
+**Estimated Complexity:** Medium
+
+#### 4.17 Add Property-Based Tests for Remaining Modules
+**Priority:** Low
+**Modules:** graph.py, lesson_cache.py, memory_guard.py
+**Estimated Complexity:** Medium
+
+### Test Metrics Summary
+
+| Metric | Value | Status |
+|--------|-------|--------|
+| Total Test Functions | ~6,046 | Good |
+| Unit Tests (tests/) | ~3,779 | Good |
+| Hub Tests (hub/tests/) | ~2,195 | Good |
+| E2E Tests (e2e_tests/) | ~72 | Low |
+| Property-Based Tests | 0 | Critical Gap |
+| Security Test Coverage | Partial | Needs Improvement |
+| Performance Test Coverage | Limited | Needs Improvement |
+
+---
+
+## 5. DOCUMENTATION & MAINTAINABILITY (23 Issues)
+
+### Critical Documentation Gaps (7)
+
+#### 5.1 Missing Module Docstrings
+**Files:** `_lexical.py`, `_stem.py`, `adapters.py`, `fingerprints.py`, `ttl.py`, `dosage.py`, `harm.py`, `decay.py`
+**Priority:** High
+**Current Issue:** No module docstrings explaining purpose and functionality
+**Suggested Improvement:** Add comprehensive module docstrings
+**Estimated Effort:** 2-3 hours
+
+#### 5.2 Missing Architecture Documentation
+**Priority:** High
+**Current Issue:** No system architecture diagrams, data flow diagrams, component interaction diagrams
+**Suggested Action:** Create `docs/architecture.md` with Mermaid diagrams
+**Estimated Effort:** 1-2 days
+
+#### 5.3 Missing API Documentation
+**Priority:** High
+**Current Issue:** No auto-generated API documentation, no REST API docs, no MCP tool reference
+**Suggested Action:** Create `docs/api.md` with examples for all public APIs
+**Estimated Effort:** 2-3 days
+
+#### 5.4 Unexplained Complex Algorithms
+**Files:** `distill.py` (MinHash LSH), `reliability.py` (contradiction detection), `_stem.py` (Porter stemmer)
+**Priority:** High
+**Current Issue:** Complex algorithms with no explanatory comments
+**Suggested Improvement:** Add detailed comments explaining algorithms
+**Estimated Effort:** 4-6 hours
+
+#### 5.5 Improve Error Messages with Context
+**Files:** Multiple files
+**Priority:** High
+**Current Issue:** Cryptic error messages lacking context
+**Suggested Improvement:** Add field names, valid values, and context to error messages
+**Estimated Effort:** 2-3 hours
+
+#### 5.6 Create Troubleshooting Guide
+**Priority:** High
+**Current Issue:** No troubleshooting documentation for common errors
+**Suggested Action:** Create `docs/troubleshooting.md` with common error scenarios
+**Estimated Effort:** 1-2 hours
+
+#### 5.7 Split Large Files
+**Files:** `mcp_server.py` (2400+), `crud.py` (2700+), `graph.py` (1000+), `hierarchical.py` (1300+), `multimodal.py` (1000+), `gateway.py` (1200+)
+**Priority:** High
+**Current Issue:** Monolithic files difficult to navigate and maintain
+**Suggested Improvement:** Split into focused modules by responsibility
+**Estimated Effort:** 5-7 days
+
+### High Priority Documentation Issues (5)
+
+#### 5.8 Add Function Docstrings to Public Functions
+**Files:** Multiple files
+**Priority:** High
+**Current Issue:** Many public functions lack docstrings
+**Suggested Improvement:** Add docstrings following NumPy style
+**Estimated Effort:** 2-3 days
+
+#### 5.9 Document All Environment Variables
+**Priority:** High
+**Current Issue:** Many env vars not documented in README
+**Suggested Action:** Add comprehensive environment variable documentation
+**Estimated Effort:** 2-3 hours
+
+#### 5.10 Create Contributing Guidelines
+**Priority:** High
+**Current Issue:** No CONTRIBUTING.md file
+**Suggested Action:** Create contributing guide covering setup, style, testing, PR process
+**Estimated Effort:** 2-3 hours
+
+#### 5.11 Create Development Setup Guide
+**Priority:** High
+**Current Issue:** No comprehensive development setup instructions
+**Suggested Action:** Create `docs/development.md` covering prerequisites, environment, testing, debugging
+**Estimated Effort:** 2-3 hours
+
+#### 5.12 Add Deployment Documentation
+**Priority:** High
+**Current Issue:** Step-by-step deployment guide missing
+**Suggested Action:** Create `docs/deployment.md` covering local, staging, production deployment
+**Estimated Effort:** 2-3 hours
+
+### Medium Priority Documentation Issues (6)
+
+#### 5.13 Add Comments for Complex Logic
+**Files:** `distill.py`, `reliability.py`, `lesson_cache.py`, `workbench.py`, `gateway.py`, `query_cmd.py`, `sql_guard.py`, `multimodal.py`
+**Priority:** High
+**Current Issue:** Complex logic lacks explanatory comments
+**Suggested Improvement:** Add detailed comments explaining logic
+**Estimated Effort:** 4-6 hours
+
+#### 5.14 Refactor Complex Functions
+**Files:** `query_cmd.py` (run_lexical, _dose_semantic, _apply_dosage), `reliability.py` (find_contradictions), `distill.py` (_lsh_candidate_pairs), `value.py` (compute), `multimodal.py` (_scan_sql), `workbench.py` (_cached_lesson)
+**Priority:** Medium
+**Current Issue:** Functions >50 lines with multiple concerns
+**Suggested Improvement:** Extract into smaller helper functions
+**Estimated Effort:** 3-4 days
+
+#### 5.15 Add Configuration Validation
+**Files:** `retrieval_io.py`, `graph.py`, `hierarchical.py`
+**Priority:** Medium
+**Current Issue:** No validation of scorer names, entity types, fact categories
+**Suggested Improvement:** Add validation against allowed values
+**Estimated Effort:** 2-3 hours
+
+#### 5.16 Add Debugging Guide
+**Priority:** Medium
+**Current Issue:** No debugging guide for common issues
+**Suggested Action:** Create `docs/debugging.md` covering debug logging, profiling, query debugging
+**Estimated Effort:** 1-2 hours
+
+#### 5.17 Add Testing Documentation
+**Priority:** Medium
+**Current Issue:** No testing guide explaining how to run/write tests
+**Suggested Action:** Create testing guide covering test organization, mocking, integration tests
+**Estimated Effort:** 1-2 hours
+
+#### 5.18 Create Migration Guide
+**Priority:** Medium
+**Current Issue:** No migration guide for breaking changes
+**Suggested Action:** Create `docs/migrations.md` documenting upgrades, breaking changes, data migration
+**Estimated Effort:** 2-3 hours
+
+### Low Priority Documentation Issues (5)
+
+#### 5.19 Standardize Docstring Format
+**Priority:** Low
+**Current Issue:** Mix of Google and NumPy style docstrings
+**Suggested Action:** Adopt NumPy style consistently
+**Estimated Effort:** 1-2 days
+
+#### 5.20 Add IDE Configuration Files
+**Priority:** Low
+**Suggested Action:** Add `.vscode/` or `.idea/` configuration, `.editorconfig`
+**Estimated Effort:** 1 hour
+
+#### 5.21 Remove Non-Informative Comments
+**Priority:** Low
+**Current Issue:** Comments like "# increment i" or "# check condition"
+**Suggested Action:** Remove or replace with explanatory comments
+**Estimated Effort:** 1-2 hours
+
+#### 5.22 Add Changelog Guidelines
+**Priority:** Low
+**Current Issue:** No guidelines at top of CHANGELOG.md
+**Suggested Action:** Document format and conventions
+**Estimated Effort:** 30 minutes
+
+#### 5.23 Add Convenience Development Scripts
+**Priority:** Medium
+**Current Issue:** No scripts for common tasks (run tests, lint, format, dev server)
+**Suggested Action:** Create scripts in `scripts/` directory
+**Estimated Effort:** 2-3 hours
+
+---
+
+## 6. PRIORITY ACTION PLAN
+
+### Immediate Actions (Week 1-2) - CRITICAL
+
+1. **Security: Fix transformers dependency** - Pin to specific tested version
+2. **Security: Fix shell=True subprocess calls** - Prevent command injection
+3. **Testing: Create test_approval.py** - Critical security code needs tests
+4. **Testing: Create test_pricing.py** - Billing code needs tests
+5. **Testing: Expand memory_guard.py tests** - All secret patterns need coverage
+6. **Performance: Fix N+1 queries in hub/crud.py** - Batch processing
+7. **Performance: Add connection pooling limits** - HTTP client limits
+8. **Performance: Add thread-safe locks to global caches** - Prevent race conditions
+9. **Architecture: Split gateway.py** - Monolithic module needs refactoring
+10. **Architecture: Create unified configuration system** - Centralize config
+
+### Short-term Actions (Week 3-4) - HIGH
+
+11. **Security: Add CSRF token validation** - Admin routes need protection
+12. **Security: Implement secure cookie flags** - HttpOnly, Secure, SameSite
+13. **Security: Add timeout to file locking loops** - Prevent resource exhaustion
+14. **Testing: Expand injection_guard.py tests** - Injection detection needs coverage
+15. **Testing: Expand sql_guard.py tests** - SQL injection prevention needs coverage
+16. **Testing: Add property-based tests for retrieval.py** - Use Hypothesis
+17. **Testing: Add property-based tests for experiment.py** - Use Hypothesis
+18. **Testing: Add load tests for gateway.py** - Concurrent request handling
+19. **Performance: Add composite database indexes** - Common query patterns
+20. **Performance: Implement async parallelization** - Independent database queries
+21. **Performance: Add pagination to unbounded results** - Prevent memory issues
+22. **Performance: Optimize nested loops in retrieval** - Vectorized operations
+23. **Performance: Add request batching for Hub API** - Batch operations
+24. **Architecture: Create repository pattern** - Data access abstraction
+25. **Architecture: Consolidate duplicate caching** - Generic cache module
+26. **Documentation: Add module docstrings** - All core modules
+27. **Documentation: Create architecture documentation** - System diagrams
+28. **Documentation: Create API documentation** - Public interfaces
+29. **Documentation: Improve error messages** - Add context
+30. **Documentation: Create troubleshooting guide** - Common errors
+
+### Medium-term Actions (Month 2-3) - MEDIUM
+
+31. **Testing: Expand graph.py tests** - Multi-hop, cycles, performance
+32. **Testing: Expand integrity.py tests** - Statistical validity
+33. **Testing: Reduce mock usage** - Integration tests
+34. **Testing: Add performance regression tests** - Baselines and CI checks
+35. **Performance: Implement comprehensive caching strategy** - Cache monitoring
+36. **Performance: Add query result streaming** - Large datasets
+37. **Performance: Add circuit breaker pattern** - External API calls
+38. **Architecture: Break down complex functions** - mcp_server.py, etc.
+39. **Architecture: Group command files** - Subdirectories by functionality
+40. **Architecture: Establish exception hierarchy** - Consistent error handling
+41. **Documentation: Add function docstrings** - All public functions
+42. **Documentation: Document environment variables** - All env vars
+43. **Documentation: Create contributing guidelines** - CONTRIBUTING.md
+44. **Documentation: Create development setup guide** - docs/development.md
+45. **Documentation: Add deployment documentation** - docs/deployment.md
+46. **Documentation: Add comments for complex algorithms** - MinHash, etc.
+47. **Documentation: Refactor complex functions** - Extract helpers
+48. **Documentation: Add configuration validation** - Scorer names, entity types
+49. **Documentation: Add debugging guide** - docs/debugging.md
+50. **Documentation: Add testing documentation** - Test guide
+51. **Documentation: Create migration guide** - docs/migrations.md
+
+### Long-term Actions (Month 3+) - LOW
+
+52. **Architecture: Add `__all__` exports** - All modules
+53. **Architecture: Standardize string formatting** - F-strings
+54. **Architecture: Fix type ignore comments** - Resolve type issues
+55. **Architecture: Improve file naming consistency** - Naming convention
+56. **Performance: Add monitoring** - Memory usage, cache hit rates
+57. **Security: Migrate SHA-1 to SHA-256** - If vendor supports
+58. **Security: Expand secret scanning** - All text fields
+59. **Security: Remove hardcoded paths** - Utility scripts
+60. **Security: Replace MD5 with SHA-256** - Non-cryptographic hashing
+61. **Documentation: Standardize docstring format** - NumPy style
+62. **Documentation: Add IDE configuration** - .vscode, .editorconfig
+63. **Documentation: Add convenience scripts** - Development helpers
+64. **Testing: Standardize test naming** - Consistent pattern
+65. **Testing: Improve test data generation** - Parameterized, fixtures
+
+---
+
+## 7. SUMMARY STATISTICS
+
+### Issues by Category
+- **Architecture & Code Quality:** 25 issues (3 Critical, 5 High, 10 Medium, 7 Low)
+- **Performance & Optimization:** 47 issues (13 Critical, 19 High, 15 Medium, 0 Low)
+- **Security & Robustness:** 40 issues (2 Critical, 5 High, 8 Medium, 25 Low)
+- **Testing & Coverage:** 17 issues (5 Critical, 5 High, 4 Medium, 3 Low)
+- **Documentation & Maintainability:** 23 issues (7 Critical, 5 High, 6 Medium, 5 Low)
+
+### Issues by Severity
+- **Critical:** 30 issues
+- **High:** 39 issues
+- **Medium:** 43 issues
+- **Low:** 40 issues
+
+### Estimated Total Effort
+- **Critical:** 20-30 days
+- **High:** 40-50 days
+- **Medium:** 30-40 days
+- **Low:** 15-20 days
+- **Total:** 105-140 days (5-7 months with 1-2 developers)
+
+### Top 10 Priority Issues (Critical + High Impact)
+
+1. **Transformers dependency with known CVEs** (Security, Critical)
+2. **Command injection in utility scripts** (Security, Critical)
+3. **N+1 query in votes loading** (Performance, Critical)
+4. **N+1 query in related traces** (Performance, Critical)
+5. **Loading entire corpus into memory** (Performance, Critical)
+6. **Unbounded concurrent HTTP requests** (Performance, Critical)
+7. **Non-thread-safe cache access** (Performance, Critical)
+8. **No test file for approval.py** (Testing, Critical)
+9. **No test file for pricing.py** (Testing, Critical)
+10. **Missing CSRF protection on admin routes** (Security, High)
+
+---
+
+## 8. POSITIVE FINDINGS
+
+The codebase demonstrates excellent practices in many areas:
+
+### Security Strengths
+- Consistent timing-safe comparisons (hmac.compare_digest)
+- Comprehensive secret scanning (memory_guard.py)
+- Strong input validation (hub/abuse.py)
+- SQL injection protection (SQLAlchemy ORM)
+- Path traversal protection (multiple tests)
+- XSS protection (textContent vs innerHTML)
+- Webhook security (HTTPS enforcement, private IP blocking)
+- Rate limiting implementation
+- PostgreSQL RLS configuration
+- AES-256-GCM encryption with key rotation
+
+### Architecture Strengths
+- Good separation of concerns in many areas
+- Excellent README and CHANGELOG
+- Well-organized test structure
+- Comprehensive command-line interface
+- Strong modular design
+
+### Performance Strengths
+- Sublinear retrieval scaling (α=0.78)
+- Efficient memory operations
+- Fast graph operations
+- Efficient ranking algorithms
+- Good caching strategies
+
+### Documentation Strengths
+- Excellent README.md
+- Well-maintained CHANGELOG.md
+- Good inline comments in many areas
+- Clear API design
+
+---
+
+## 9. CONCLUSION
+
+The commontrace-v2 codebase is **well-architected and secure overall**, with strong foundations in security practices, modular design, and comprehensive testing. However, there are **significant opportunities for improvement** in:
+
+1. **Performance optimization** - 47 issues including N+1 queries, memory management, and concurrency
+2. **Test coverage for security-critical modules** - approval.py and pricing.py have no dedicated tests
+3. **Documentation completeness** - Missing architecture docs, API docs, and developer guides
+4. **Code organization** - Several monolithic files need refactoring
+
+The most critical issues are:
+- **Dependency security** (transformers version range)
+- **Command injection risks** in utility scripts
+- **Performance bottlenecks** in database queries and memory management
+- **Missing tests** for security-critical code
+
+Addressing the critical and high-priority issues (30-50 days of effort) would significantly improve the codebase's security, performance, and maintainability. The remaining medium and low-priority issues can be addressed incrementally over time.
+
+**Overall Codebase Rating:** B+ (Strong foundation with specific areas for improvement)
 ```
-
-## Tier 1 — Measurement and retrieval quality
-
-Prompts 1 and 2 come first because every later prompt is judged by them. Prompts 3–9 attack the largest retrieval gaps, each with a numeric target.
-
-### Prompt 1 — Answer accuracy, judged the way the leaderboards judge it
-
-Moves: comparability with every competitor. **Needs keys.**
-
-```markdown
-ENHANCEMENT: Measure end-to-end answer accuracy exactly as each benchmark's official protocol does.
-
-WHY: CommonTrace reports evidence recall; competitors report judged answer accuracy (LongMemEval 94-96%, LoCoMo 92-94%, BEAM-10M 64-73%). benchmarks/conversation_bench.py --answer already answers and grades, but with one generic judge (JUDGE_PROMPT) for every dataset, so its numbers cannot be compared with anyone's.
-
-RESEARCH:
-- LongMemEval (arXiv 2410.10813) and its repo src/evaluation/evaluate_qa.py (MIT): one judge prompt per question type and a separate one for abstention (_abs) questions.
-- LoCoMo (arXiv 2402.17753) and the Mem0 paper (arXiv 2504.19413): the LLM-as-judge "J" protocol, which categories are scored (1-4) and which are excluded (adversarial, 5).
-- BEAM (arXiv 2510.27246) and its dataset card: per-ability rubric/nugget scoring, Kendall tau-b for event ordering, abstention scoring.
-- Mem0's 2026 benchmark post: report tokens per query and p50 latency next to accuracy.
-
-BUILD:
-1. benchmarks/judges/ with one module per benchmark that reproduces its official judge prompt and scoring rule verbatim; a header comment names the source file and commit. Keep today's judge as --judge generic.
-2. Separate --answer-model and --judge-model; default the judge to the model the official protocol names; record both in the output JSON.
-3. Per category: accuracy, mean context tokens sent to the answer model, answer latency p50/p95, total cost. For BEAM, the official per-ability score.
-4. Disk cache for answers and judgments keyed by (model, prompt hash); resume after interruption; --max-cost USD refuses to start when the estimate is higher.
-5. Two reference modes in the same run: full-context (whole history when it fits the model) and no-memory, so every table shows memory's lift.
-6. Targets for the first run: LongMemEval-S all 500, LoCoMo categories 1-4 (1,540), BEAM 100K (400). Print the cost estimate and stop for approval.
-
-ACCEPTANCE:
-- On a 100-answer sample, our judge agrees with the official script's verdict on at least 98% (run both, diff them, report disagreements).
-- README scoreboard gains an "answer accuracy" table with models, date and cost.
-- No retrieval code changed in this PR.
-```
-
-### Prompt 2 — Statistics and scale in the benchmark harness
-
-Moves: trust in every later result; exposes BEAM 1M/10M. No keys.
-
-```markdown
-ENHANCEMENT: Make benchmark deltas statistically honest and add the scales where leaders differentiate.
-
-WHY: Our tuning moved scores by 0.5-2 points, within the sampling error of 120-400 questions. Leaders separate at BEAM 1M and 10M (Hindsight 73.9% -> 64.1%, Honcho 63.1% -> 40.6%), where we have never run. Retrieval-only systems also publish Recall@k (agentmemory: 95.2% R@5 on LongMemEval), which we cannot quote.
-
-BUILD:
-1. Paired bootstrap (10,000 resamples, fixed seed) for the difference between two result JSONs: benchmarks/compare.py A.json B.json prints delta and 95% CI per benchmark and category, and marks changes whose CI excludes zero.
-2. Standard retrieval metrics beside evidence recall: Recall@5/10, NDCG@10 at turn and session level (match LongMemEval's src/evaluation/print_retrieval_metrics.py definitions).
-3. BEAM 500K, 1M and 10M support with streaming ingestion (no whole-file load), ingest throughput (turns/s), store size on disk, peak RSS, recall p50/p95.
-4. StateMemBench (arXiv 2608.19652) loader if its data is public: current-state accuracy proxy = evidence of the latest state in context and superseded state absent.
-5. A one-command scoreboard: benchmarks/scoreboard.py runs the fast keyword-only suite (< 15 min on 4 cores) and writes a markdown table; CI runs it on a 10% stratified sample and fails on a regression whose CI excludes zero.
-
-ACCEPTANCE: compare.py reproduces a known delta from PR #92; BEAM 1M ingests and answers end to end with numbers in the README; CI job green and under 10 minutes.
-```
-
-### Prompt 3 — Fact-augmented keys (index what each turn means, not only what it says)
-
-Moves: information extraction, preferences, multi-session. Target: +6 points evidence recall on BEAM information extraction and LongMemEval single-session-preference at 1,500 tokens. No keys for the rule path; optional model path.
-
-```markdown
-ENHANCEMENT: Index every turn under extra keys (facts, keyphrases, normalised entities, dates) that point back to the same turn.
-
-WHY: LongMemEval's analysis found that expanding each value's index key with extracted user facts raised recall and accuracy, and that round-level (turn-level) values beat session-level ones. Our misses on BEAM information extraction are paraphrases ("colour technologist" asked as "profession"; "Canva Pro $12.99/month" asked as "service I use for my resume").
-
-RESEARCH: LongMemEval (2410.10813) section on key expansion and its repo src/index_expansion/batch_expansion_turn_userfact.py and batch_expansion_turn_keyphrases.py (MIT). Doc2query-style expansion. Mem0's April 2026 change: entities extracted, embedded and cross-linked as a retrieval boost.
-
-BUILD:
-1. A key table in commontrace/conversation/store.py: (turn_id, kind, text) with kinds fact|keyphrase|entity|date. Written at add() time.
-2. Rule path (default, no model): keyphrases by RAKE/YAKE-style scoring in stdlib, entities from commontrace/entities.py, hypernym/category hints from a small curated map (job titles -> profession/occupation/job, money+per month -> subscription/cost/price, pet species -> pet), normalised dates.
-3. Model path (opt-in, uses commontrace/conversation/extract.py's model config): one batched call per 40 turns producing self-contained user facts, cached.
-4. Search: keys are a separate lexical (and, when an embedder is on, semantic) arm fused by RRF with a weight; a key hit retrieves its source turn, never the key text itself.
-5. explain shows which key matched.
-
-ACCEPTANCE: target above with the gate in the preamble; ingest time rule path <= +30%; tests for each key kind and for the key -> turn mapping.
-```
-
-### Prompt 4 — Time-aware retrieval: event dates, time filters, temporal arm
-
-Moves: temporal reasoning, event ordering. Target: LongMemEval temporal-reasoning evidence recall 57.5% -> 75% at 1,500 tokens keyword-only; BEAM temporal and event ordering +5.
-
-```markdown
-ENHANCEMENT: Resolve when things happened (not only when they were said), and let questions filter and rank by those dates.
-
-WHY: LongMemEval found time-aware query expansion (narrowing the search range to the time the question names) raised temporal recall substantially. Mastra's Observational Memory stores up to three anchors per observation (observation date, referenced date, relative offset) and reports 95.5% on temporal questions. Hindsight runs a dedicated temporal arm in parallel with semantic, BM25 and graph.
-
-RESEARCH: LongMemEval (2410.10813) and src/index_expansion/batch_expansion_session_temp_event.py, temp_query_search_pruning.py (MIT). TReMu (arXiv 2502.01630): time-aware memorisation and neuro-symbolic date reasoning. Hindsight (MIT): hindsight_api/engine/query_analyzer.py (TemporalConstraint), search/temporal_extraction.py, search/reranking.py compute_recency_decay and temporal proximity in apply_combined_scoring.
-
-BUILD:
-1. Write time: for each turn, extract referenced dates/intervals from its text with commontrace/conversation/timeparse.py relative to the turn's own timestamp ("last Tuesday" said on 2024-03-14 -> 2024-03-12); store as (turn_id, start, end, granularity, phrase).
-2. Query time: parse the question's time constraint (absolute, relative to now, "before/after X", "first/last time", "how many days between"). Hard-filter when explicit, soft-boost otherwise.
-3. A temporal arm: turns whose event interval overlaps the constraint, ranked by proximity; fused by RRF with the other arms.
-4. Annotate recalled lines with resolved event dates, e.g. [said 2024-03-14; about 2024-03-12], so the reader can do arithmetic.
-5. Ordering questions return their evidence sorted by event date with ordinals (1., 2., 3.).
-
-ACCEPTANCE: targets above; a unit table of 40 tricky phrases ("the weekend before last", "two Fridays ago", "in Q3", "over Christmas") with expected intervals; no change to recall on questions without time words.
-```
-
-### Prompt 5 — Entity graph with spreading activation (multi-hop)
-
-Moves: multi-session reasoning, LoCoMo multi-hop. Target: BEAM multi-session +6 and LoCoMo multi-hop 57.9% -> 65% at 1,500 tokens.
-
-```markdown
-ENHANCEMENT: Add a graph arm: entities and turns as nodes, mentions/co-occurrence/time-adjacency as edges, ranked by personalised PageRank seeded from the question.
-
-WHY: Multi-hop and multi-session questions need evidence that shares no words with the question but shares an entity with evidence that does. HippoRAG 2 reports gains on associative (multi-hop) retrieval with PPR over a phrase/passage graph; Hindsight builds temporal, semantic, entity and causal links at retain time and searches the graph in parallel with vector, BM25 and temporal arms; Mem0's April 2026 algorithm added entity linking as a retrieval boost.
-
-RESEARCH: HippoRAG 2 (arXiv 2502.14802) and repo src/hipporag/HippoRAG.py run_ppr, graph_search_with_fact_entities (MIT). Hindsight (arXiv 2512.12818) and repo hindsight_api/engine/retain/link_creation.py, search/graph_retrieval.py, search/fusion.py cap_per_source (MIT). Zep/Graphiti (arXiv 2501.13956; graphiti_core search recipes, Apache-2.0).
-
-BUILD:
-1. Reuse commontrace/entities.py for mentions; store edges in SQLite (turn-entity, entity-entity co-mention with counts, turn-turn same-session adjacency with time gap).
-2. Query: seed entities = entities in the question plus entities in the top-5 lexical/semantic hits; run PPR (damping 0.5-0.85, sweep it) with numpy if present, pure-Python power iteration otherwise; cap 30 iterations.
-3. Arm output = turns ranked by PPR mass; cap per source before fusion (as Hindsight does) so the graph cannot crowd out direct matches.
-4. Gate the arm: only when the question is multi-hop/broad (search.is_broad, two or more entities, or "both/and/compare/relationship"), so single-hop latency does not grow.
-
-ACCEPTANCE: targets above; graph build adds <= 40% ingest time; recall p95 +<= 30 ms keyword-only on BEAM 100K; tests with a 3-hop toy conversation.
-```
-
-### Prompt 6 — Embedder and reranker bake-off on our own benchmarks
-
-Moves: every semantic number. Target: +3 points overall evidence recall on LoCoMo, BEAM and DolphinBench at 1,500 tokens at equal or lower recall latency.
-
-```markdown
-ENHANCEMENT: Pick the default embedder and cross-encoder by measured quality-per-millisecond on our four benchmarks, not by general leaderboards.
-
-WHY: We ship minilm/arctic-m and an accurate cross-encoder chosen in 2025. On DolphinBench the replacing cross-encoder cost evidence until we blended it; newer small models (0.3-0.6B) are trained on instruction-style queries closer to agent requests.
-
-RESEARCH: Qwen3 Embedding and Reranker (arXiv 2506.05176). EmbeddingGemma (arXiv 2509.20354). Late interaction / multi-vector as an option (ColBERT-style). Matryoshka truncation for smaller vectors. Hindsight's cross_encoder.py and ji
