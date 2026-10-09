@@ -1,1284 +1,747 @@
-# CONSOLIDATED ENGINEERING REPORT
-# Multi-Agent Sequential Line-by-Line Audit: CommonTrace-v2 vs Competitors
-
-**Principal Software Architect:** Leading multi-agent team audit
-**Date:** 2025-01-06
-**Scope:** 9 repositories (commontrace-v2, cognee, graphiti, mem0, zep, EverOS, hindsight, letta, supermemory)
-**Methodology:** Sequential line-by-line code audit with file:line citations
-
----
-
-## EXECUTIVE SUMMARY
-
-This report presents the findings of a comprehensive, sequential line-by-line code audit conducted by a multi-agent team consisting of a Supervisor Agent, 8 Target Repo Analyzer Sub-Agents, and a CommonTrace Deep-Dive Sub-Agent. The audit examined CommonTrace-v2 and 8 competitor repositories across security, performance, architecture, and code quality dimensions.
-
-**Key Finding:** CommonTrace-v2 demonstrates exceptional engineering maturity with best-in-class security practices (argon2 authentication, RBAC, audit logging, rate limiting), sophisticated performance optimizations (caching, bounded parallelism, connection pooling), and a well-layered architecture. However, opportunities exist to adopt standout patterns from competitors including closing LRU cache with proxy leases, interface-based storage adapters, phased batch processing, and hybrid scoring systems.
-
-**Audit Coverage:**
-- **Cognee:** 830+ test files, interface-based adapters, closing LRU cache, pipeline architecture
-- **Graphiti:** Temporal knowledge graphs, semaphore-bounded concurrency, safe SQLite+JSON cache
-- **Mem0:** Phased batch processing, hybrid scoring, secret redaction, identity key protection
-- **Zep:** Create-then-catch-conflict provisioning, pin-or-expose tool control, retry with exponential backoff
-- **EverOS:** DDD 5-layer architecture with import-linter enforcement, defense-in-depth path traversal protection
-- **Hindsight:** Multi-layer caching with TTL and coalescing, extension-based authentication, multi-provider LLM routing
-- **Letta:** Repository migration pattern, AI usage policy, comprehensive observability integration
-- **Supermemory:** Durable Object transaction pattern, tool dependency injection, shared type contracts
-
----
-
-## PART 1: COMMONTRACE-V2 DEEP-DIVE AUDIT
-
-### Security Analysis
-
-#### Strengths
-
-**1. Comprehensive Authentication System with Argon2 and HMAC**
-- **File:** `hub/auth.py:42-145`
-- **Lines:** 42-145
-- **Description:** API keys hashed with argon2 (memory-hard, GPU-resistant), HMAC-based verification for fast lookup with pepper from environment, legacy argon2 scan fallback for backward compatibility, JWT/OIDC token verification with JWKS caching, thread-safe auth cache with TTL and PostgreSQL NOTIFY invalidation, region-based data residency enforcement
-- **Value:** State-of-the-art password hashing with fast verification via HMAC, preventing brute force attacks while maintaining performance
-
-**2. Granular RBAC with Scopes**
-- **File:** `hub/scopes.py:1-56`, `hub/rbac.py:1-100`
-- **Lines:** 1-56, 1-100
-- **Description:** Four-tier scope system (read, write, admin, scim), eight named roles (viewer, analyst, curator, validator, deployer, security_admin, billing_admin, owner), capability-based tool authorization (97 tools mapped to capabilities), role-scope mapping for consistent permission grants, ContextVars-based request context for org_id, actor, scopes
-- **Value:** Fine-grained access control with capability-based authorization, enabling principle of least privilege
-
-**3. Comprehensive Audit Logging**
-- **File:** `hub/audit.py:1-121`
-- **Lines:** 1-121
-- **Description:** Structured audit entries with actor, action, org_id, target_type, target_id, summary, async context manager for automatic timing and status recording, retention sweep with configurable older_than_days (default 90), paginated audit listing with filters, actor tracking for API keys (api-key:prefix) and users (user:id)
-- **Value:** Complete audit trail for compliance and security monitoring
-
-**4. Sophisticated Rate Limiting**
-- **File:** `hub/abuse.py:147-299`
-- **Lines:** 147-299
-- **Description:** Token bucket algorithm with configurable per-minute rate and burst, in-memory implementation with automatic idle sweep (1-hour TTL), PostgreSQL backend option for distributed rate limiting, IP-based rate limiting with IPv6 subnet normalization, trusted proxy hop support for X-Forwarded-For, separate rate limits for contribute, read, auth, and readyz endpoints
-- **Value:** Production-grade rate limiting with distributed backend support for multi-instance deployments
-
-**5. SQL Injection Prevention with SELECT-Only Guard**
-- **File:** `commontrace/sql_guard.py:1-249`
-- **Lines:** 1-249
-- **Description:** Validates only SELECT/WITH statements allowed, forbidden keyword detection (INSERT, UPDATE, DELETE, DROP, etc.), markdown fence and comment stripping, automatic LIMIT clamping to prevent DoS, literal and identifier masking for safe scanning, read-only execution with row caps and statement timeouts
-- **Value:** Defense-in-depth SQL injection prevention for user-provided queries
-
-**6. Memory Guard for Secret/PII/Injection Detection**
-- **File:** `commontrace/memory_guard.py:1-249`
-- **Lines:** 1-249
-- **Description:** High-confidence secret pattern detection (AWS keys, GitHub tokens, Stripe keys, etc.), medium-confidence credential assignment detection, PII detection (email, phone, SSN, credit card with Luhn validation), injection phrase pattern detection (instruction override, jailbreak, forged system role), hidden Unicode codepoint detection (zero-width characters, bidi overrides), redaction functions for secrets and PII
-- **Value:** Comprehensive secret and PII detection with redaction capabilities
-
-**7. Injection Guard for Lesson Text**
-- **File:** `commontrace/injection_guard.py:1-67`
-- **Lines:** 1-67
-- **Description:** BLAKE2b-based digest caching for performance, memory guard integration for injection detection, clean/quarantine split for lesson items, notice banner to prevent prompt injection
-- **Value:** Prompt injection detection with quarantine mechanism
-
-**8. Row-Level Security with Org Scoping**
-- **File:** `hub/db.py:66-106`
-- **Lines:** 66-106
-- **Description:** PostgreSQL RLS with app.org_id session variable, automatic scoping via session_scope context manager, RLS status checking for deployment verification, bypass detection for security monitoring
-- **Value:** Database-level security enforcement with row-level isolation
-
-#### Gaps
-
-**1. Secret Management via Environment Variables Only (Severity: High)**
-- **File:** `hub/secrets_provider.py:1-16`
-- **Lines:** 1-16
-- **Description:** Only supports environment variables and _FILE pattern, no integration with secret managers (HashiCorp Vault, AWS Secrets Manager, etc.), no secret rotation mechanism, pepper for HMAC stored in environment variable without rotation
-- **Recommendation:** Implement secret manager integration with automatic rotation
-
-**2. No Secret Rotation for Gateway Tokens (Severity: Medium)**
-- **File:** `commontrace/gateway.py:246-260`
-- **Lines:** 246-260
-- **Description:** Tokens created once and never rotated, no expiration mechanism for gateway tokens, no revocation mechanism for compromised tokens
-- **Recommendation:** Add token expiration and rotation support
-
-**3. No XSS Protection (Severity: Low)**
-- **Description:** System is CLI-focused with no web UI, so XSS is not immediately applicable, however if web UI is added, XSS protection will be needed, no HTML sanitization for user-provided content
-- **Recommendation:** Add XSS protection if web rendering is added
-
-**4. No IP-Based Restrictions in Gateway (Severity: Low)**
-- **File:** `commontrace/gateway.py`
-- **Description:** Gateway has no IP allowlist/blocking, Hub has ip_allowlist but gateway is independent
-- **Recommendation:** Add optional IP-based access controls to gateway
-
-**5. Limited Request Size Validation (Severity: Medium)**
-- **File:** `commontrace/gateway.py:45-48`
-- **Lines:** 45-48
-- **Description:** MAX_BODY_BYTES = 1MB, MAX_ITEMS = 200, MAX_TEXT_CHARS = 20K, limits exist but not consistently enforced across all endpoints, no per-endpoint size limits
-- **Recommendation:** Add per-endpoint size validation
-
-#### Anti-patterns
-
-**1. check_same_thread=False in SQLite**
-- **File:** `commontrace/llm_cache.py:52`
-- **Line:** 52
-- **Description:** Disables SQLite's thread safety check for performance, mitigated by explicit locking but still an anti-pattern
-- **Recommendation:** Use connection pooling or separate connections per thread
-
-**2. Global Module-Level Caches**
-- **File:** `commontrace/gateway.py:66-75`
-- **Lines:** 66-75
-- **Description:** Module-level caches (_ACTIVE_CACHE, _BODY_CACHE) with global locks, makes testing harder and reduces thread-safety guarantees
-- **Recommendation:** Consider dependency injection for caches
-
-### Performance Analysis
-
-#### Strengths
-
-**1. Thread-Safe LLM Cache with SQLite + JSON**
-- **File:** `commontrace/llm_cache.py:1-91`
-- **Lines:** 1-91
-- **Description:** SQLite-based cache with JSON serialization (avoids pickle vulnerabilities), thread-safe with explicit locking, corrupt entry handling (treats as miss), WAL mode for concurrent access, MD5-based cache key (usedforsecurity=False for non-security use), hit/miss statistics tracking, opt-in via COMMONTRACE_LLM_CACHE environment variable
-- **Value:** Safe, performant caching with SQLite durability
-
-**2. Bounded Parallel Execution**
-- **File:** `commontrace/parallel.py:1-34`
-- **Lines:** 1-34
-- **Description:** Semaphore-controlled parallel map for fan-out operations, configurable max_workers (default 4), input order preservation, first exception propagation after all workers settle, prevents resource exhaustion from unbounded ThreadPoolExecutor
-- **Value:** Safe parallelism with resource exhaustion prevention
-
-**3. Mtime-Keyed Caching**
-- **File:** `commontrace/gateway.py:78-143`
-- **Lines:** 78-143
-- **Description:** Active lessons cache keyed by directory listing fingerprint, lesson body cache keyed by file identity (dev, inode, mtime_ns, ctime_ns, size), generation-aware caching (retains one generation per path), byte-based cache size limits (16MB total, 512 entries), thread-safe with explicit locks
-- **Value:** Intelligent cache invalidation based on file system changes
-
-**4. Connection Pooling with Configuration**
-- **File:** `hub/db.py:18-33`
-- **Lines:** 18-33
-- **Description:** SQLAlchemy async engine with configurable pool_size, max_overflow, pool_timeout, pool_recycle, pool_pre_ping for connection health checks, statement timeout configuration via server_settings, session factory with expire_on_commit=False
-- **Value:** Production-ready connection pooling with health checks
-
-**5. Distributed Rate Limiting with PostgreSQL**
-- **File:** `hub/abuse.py:222-299`
-- **Lines:** 222-299
-- **Description:** PostgreSQL-backed rate limiting for multi-instance deployments, single UPSERT operation for token consumption, automatic sweep of idle buckets, connection pool in dedicated thread for async compatibility, timeout handling for pool startup
-- **Value:** Distributed rate limiting for horizontal scaling
-
-**6. Sophisticated Retrieval Scoring**
-- **File:** `commontrace/retrieval.py:1-349`
-- **Lines:** 1-349
-- **Description:** Multiple scoring algorithms (adaptive-v1, idf-v3, idf-v2, bm25-v1, count-v1), BM25 with configurable k1 and b parameters, IDF floor for rare terms, length normalization with clamping, CJK segmentation support, field-weighted scoring (description, applies_when, tags, domain), adaptive tail ratio based on query term count
-- **Value:** Flexible, tunable retrieval scoring with multiple algorithms
-
-**7. Lazy Singleton Pattern**
-- **File:** `commontrace/gateway.py:78-98`
-- **Lines:** 78-98
-- **Description:** Lazy initialization of expensive resources, mtime-based cache invalidation, thread-safe with double-checked locking pattern
-- **Value:** Efficient resource management with lazy initialization
-
-#### Gaps
-
-**1. No Query Result Caching (Severity: Medium)**
-- **Description:** Retrieval results not cached despite potential for repeated queries, no semantic caching layer for common retrieval patterns
-- **Recommendation:** Implement query result caching with TTL
-
-**2. No Connection Pool Configuration for Gateway (Severity: Low)**
-- **Description:** Gateway HTTP connections not pooled, no visible HTTP client configuration
-- **Recommendation:** Add HTTP connection pooling for gateway
-
-**3. Limited Async Patterns (Severity: Medium)**
-- **Description:** Some operations are synchronous despite async infrastructure, ThreadPoolExecutor used for CPU-bound operations but not consistently
-- **Recommendation:** Expand async patterns throughout codebase
-
-**4. No Lazy Loading for Large Graphs (Severity: Low)**
-- **Description:** Graph queries may load entire neighborhoods, no streaming cursor pattern for large result sets
-- **Recommendation:** Add lazy loading for graph traversals
-
-#### Anti-patterns
-
-**1. Sequential Fallback in Some Operations**
-- **Description:** Some batch operations fall back to sequential on failure, could use concurrent.futures for parallel retry
-- **Recommendation:** Use ThreadPoolExecutor for fallback operations
-
-### Architectural Analysis
-
-#### Strengths
-
-**1. Multi-Provider Memory Adapter Pattern**
-- **File:** `commontrace/memory_adapters.py:1-100`
-- **Lines:** 1-100
-- **Description:** Abstract adapter interface for Mem0, Letta, LettaCore, unified Item model (id, text, raw), search and delete operations with consistent API, adapter-specific configuration via kwargs, easy extension for new memory providers
-- **Value:** Clean abstraction for multi-provider memory integration
-
-**2. Temporal Knowledge Graph**
-- **File:** `commontrace/graph.py:1-349`
-- **Lines:** 1-349
-- **Description:** Typed nodes (17 entity types) and edges (16 relation types), bi-temporal edges (valid_at, invalid_at, expired_at), version tracking with is_latest flag, multi-hop traversal with MAX_HOPS limit, JSONL-based storage for version control friendliness, parent-child relationships for hierarchical structures
-- **Value:** Rich temporal knowledge graph with version control
-
-**3. Layered Architecture (CLI → Gateway → Hub)**
-- **Description:** Clear separation: CLI client (commontrace/) → Gateway (commontrace/gateway.py) → Hub (hub/), Gateway as language-neutral HTTP/stdio door, Hub as centralized multi-tenant service, Protocol as implementation-independent spec (protocol/PROTOCOL.md), Memory layer as local file-based storage
-- **Value:** Clean separation of concerns with protocol-based design
-
-**4. Repository Pattern (Hub)**
-- **Description:** SQLAlchemy ORM with declarative models (hub/models.py), async session management with automatic rollback, row-level security integration, clear separation between models and business logic
-- **Value:** Clean data access with transaction management
-
-**5. Provider Pattern for External Services**
-- **Description:** LLM providers with unified interface, embedding providers with batch support, cross-encoder providers for reranking, easy addition of new providers
-- **Value:** Extensible provider abstraction
-
-**6. Lesson Cache with Incremental Rebuild**
-- **File:** `commontrace/lesson_cache.py:1-165`
-- **Lines:** 1-165
-- **Description:** JSON-based cache with format versioning, projected fields for efficient retrieval, TTL-based expiration, scope and temporal filtering, thread-safe with scan lock
-- **Value:** Efficient lesson caching with incremental updates
-
-**7. Protocol-Based Design**
-- **Description:** JSON schemas for Trace and Lesson (protocol/schemas/), implementation-independent protocol specification, multiple language bindings possible, versioned protocol (2.0.0)
-- **Value:** Language-agnostic protocol with versioning
-
-**8. Pipeline Architecture for Code Review**
-- **Description:** Double-review agent pipeline (SKILL.md), phased execution (Alpha → Implementer → Reviewer → Omega), lesson injection before each run, outcome detection and lesson extraction
-- **Value:** Structured code review pipeline with quality gates
-
-#### Gaps
-
-**1. No Circuit Breaker Pattern (Severity: Medium)**
-- **Description:** External service calls (LLM, embedding) lack circuit breaker, no automatic failover between providers, no health checking or degradation strategies
-- **Recommendation:** Implement circuit breaker pattern for external dependencies
-
-**2. No Event System for Mutations (Severity: Low)**
-- **Description:** No pub/sub mechanism for graph or lesson changes, modules call each other directly, difficult to add cross-cutting concerns
-- **Recommendation:** Add event bus for decoupling
-
-**3. Limited Plugin System (Severity: Low)**
-- **Description:** No hooks for custom preprocessing/postprocessing, no middleware pipeline for requests/responses
-- **Recommendation:** Implement plugin/middleware system for extensibility
-
-**4. Tight Coupling in Some Areas (Severity: Low)**
-- **Description:** Some modules directly import and use database adapters, no dependency injection container
-- **Recommendation:** Add DI container for better testability
-
-#### Anti-patterns
-
-**1. Global State in Gateway**
-- **File:** `commontrace/gateway.py:66-75`
-- **Lines:** 66-75
-- **Description:** Module-level caches with global locks, makes testing harder
-- **Recommendation:** Use dependency injection for caches
-
-**2. Large Methods in Some Files**
-- **Description:** Some methods exceed 100 lines, could benefit from extraction
-- **Recommendation:** Break down large methods into smaller helpers
-
-### Code Quality
-
-#### Strengths
-
-**1. Comprehensive Type Hints**
-- **Description:** Extensive use of typing module (Optional, Dict, List, Any, Literal), type aliases for complex types, TYPE_CHECKING imports to avoid circular dependencies, protocol-based interfaces for duck typing
-- **Value:** Strong type safety with comprehensive annotations
-
-**2. Structured Logging**
-- **Description:** Logging configured at appropriate levels, contextual messages with relevant data, debug logging for failures that don't affect main flow, warning logging for deprecations and fallbacks
-- **Value:** Clear, actionable logging with proper levels
-
-**3. Error Handling**
-- **Description:** Custom exception classes (ApiError, TransientAuthError, ScopeDenied, CapabilityDenied), context-specific error messages, transient vs permanent error classification, graceful degradation patterns
-- **Value:** Structured error handling with clear semantics
-
-**4. Testing Infrastructure**
-- **Description:** Extensive test suite in hub/tests/ (100+ test files), E2E tests in e2e_tests/ with tiered structure, benchmark tests in benchmarks/, concurrency tests for rate limiting, security tests (authentication, RLS, type confusion)
-- **Value:** Comprehensive test coverage across dimensions
-
-**5. Code Organization**
-- **Description:** Clear module boundaries (commands, hub, memory, protocol), feature-based organization within modules, consistent naming conventions (snake_case for modules/functions, PascalCase for classes), separate exception modules per domain
-- **Value:** Clean, maintainable code organization
-
-**6. Documentation**
-- **Description:** Comprehensive docstrings on public methods, inline comments for complex logic, protocol specification (protocol/PROTOCOL.md), AGENTS.md for AI coding agents, SKILL.md for code-review reference profile
-- **Value:** Comprehensive documentation for users and contributors
-
-#### Gaps
-
-**1. Limited Type Checking Enforcement**
-- **Description:** Type hints present but no mypy/pyright configuration visible, some functions lack return type annotations
-- **Recommendation:** Add mypy to CI with strict mode
-
-**2. Inconsistent Error Handling Depth**
-- **Description:** Some errors are re-raised, others are caught and logged, inconsistent use of custom exceptions vs built-in exceptions
-- **Recommendation:** Standardize on custom exceptions with error codes
-
-**3. No Code Coverage Metrics**
-- **Description:** No coverage.py configuration visible, no coverage thresholds in CI
-- **Recommendation:** Add coverage reporting with minimum threshold (e.g., 80%)
-
-#### Anti-patterns
-
-**1. Magic Numbers**
-- **Description:** Some hardcoded limits without constants, example: MAX_HOPS = 4, DEFAULT_MAX_WORKERS = 4
-- **Recommendation:** Extract magic numbers to named constants
-
-**2. Deep Nesting in Some Functions**
-- **Description:** Some functions have multiple levels of nesting, could be refactored into smaller helper methods
-- **Recommendation:** Extract nested logic to helper methods
-
----
-
-## PART 2: SYNTHESIS - STANDOUT PATTERNS FROM COMPETITORS
-
-### Pattern 1: Closing LRU Cache with Proxy Leases (Cognee)
-- **File:** `cognee/infrastructure/databases/utils/closing_lru_cache.py:317-456`
-- **Lines:** 317-456
-- **Description:** Sophisticated cache that manages resource lifecycles through proxy objects, preventing use-after-close errors while ensuring cleanup
-- **Code Example:**
-```python
-class ClosingLRUCache:
-    def __init__(self, maxsize=128):
-        self._cache = {}
-        self._proxy_leases = weakref.WeakValueDictionary()
-        self._maxsize = maxsize
-        self._lock = threading.RLock()
+================================================================================
+COMPETITIVE INTELLIGENCE REPORT: CommonTrace vs Memory/Agent Ecosystem
+================================================================================
+
+Generated: 2025-01-09
+Analysis Scope: 8 Competitor Repositories (Cognee, EverOS, Graphiti, Hindsight, 
+               Mem0, Supermemory, Zep, Letta)
+Target: Commontrace (Protocol-First Memory System)
+
+================================================================================
+1. EXECUTIVE SUMMARY & CORE GAPS
+================================================================================
+
+CURRENT POSITION:
+CommonTrace is a protocol-first memory system with strong theoretical foundations
+(bi-temporal tracking, append-only design, row-level security) and excellent 
+performance on temporal reasoning tasks. However, it lags competitors in several 
+critical areas:
+
+CORE GAPS IDENTIFIED:
+
+FEATURE GAPS:
+- No MCP Server - Missing standard AI assistant integration protocol 
+  (Cognee, Graphiti, Hindsight, Supermemory all have this)
+- No CLI Tool - Lacks quick testing/prototyping interface 
+  (Cognee, EverOS, Mem0, Hindsight all have this)
+- No Dashboard - No visualization or debugging UI 
+  (Cognee, Hindsight, Mem0, Supermemory, Zep all have this)
+- No User Profiles - Missing static + dynamic context aggregation 
+  (EverOS, Hindsight, Mem0, Supermemory all have this)
+- No Framework Integrations - Limited agent framework support 
+  (Hindsight has 60+, others have 10-40+)
+- No Observations/Reflection - Missing background consolidation 
+  (Cognee, Hindsight, EverOS have this)
+- No Knowledge Wiki - No editable knowledge documents 
+  (EverOS, Hindsight have this)
+- No Data Connectors - No Google Drive, Gmail, GitHub integrations 
+  (Cognee, Supermemory have this)
+
+ARCHITECTURAL GAPS:
+- No Multi-Signal Retrieval - Missing parallel semantic + BM25 + entity fusion 
+  (Mem0, Hindsight, Supermemory all have this)
+- No Temporal Fact Invalidation - Missing bi-temporal validity windows 
+  (Graphiti's unique feature)
+- No Pipeline Recovery - Missing crash-resistant state preservation 
+  (Cognee has this)
+- No Provider Pattern - Missing pluggable LLM/embedding/vector store abstractions 
+  (Mem0 has 24 LLMs, 30 vector stores)
+- No Multi-Tenancy Isolation - Missing per-user database isolation 
+  (Cognee has this)
+
+RELIABILITY GAPS:
+- Basic Error Handling - Missing structured exception hierarchy with remediation 
+  (EverOS, Cognee have sophisticated systems)
+- Limited Logging - Missing structured logging with context 
+  (EverOS, Cognee have comprehensive logging)
+- No Health Endpoints - Missing liveness/readiness probes 
+  (Hindsight has this)
+- No Security Scanning - Missing CI/CD security scanning 
+  (Hindsight, Graphiti, Cognee have this)
+- No Helm Charts - Missing production Kubernetes deployment 
+  (Hindsight, Cognee have this)
+
+BENCHMARK PERFORMANCE GAP:
+CommonTrace (keyword-only, 4K tokens): LoCoMo 83.84%, LongMemEval 85.00%, BEAM 68.36%
+Supermemory (semantic, 7K tokens): #1 on all benchmarks with 95% Recall@15
+Mem0 (semantic, 7K tokens): LoCoMo 92.5%, LongMemEval 94.4%, BEAM 64.1% (1M)
+
+Gap: Commontrace is competitive on temporal reasoning but trails significantly on 
+multi-hop and summarization due to keyword-only retrieval.
+
+================================================================================
+2. COMPETITOR FEATURE & ARCHITECTURE MATRIX
+================================================================================
+
+REPOSITORY           | TECH STACK                          | KEY FEATURES
+---------------------|--------------------------------------|------------------------------------
+COGNEE              | Python 3.10+, FastAPI, SQLAlchemy 2.0, | Knowledge graph + vector hybrid,
+                     | Ladybug/Kuzu/Neo4j/Postgres, LanceDB, | Keyless operation (GLiNER local),
+                     | LiteLLM, FastEmbed, Redis            | COGX migration format, code graph,
+                     |                                      | Data connectors (Google Drive, Gmail),
+                     |                                      | Pipeline recovery, 50+ CI workflows
+                     |                                      | 
+                     | STRENGTHS: LLM-free workflows,       | WEAKNESSES: No user profiles,
+                     | Multi-backend isolation,              | No temporal invalidation,
+                     | Comprehensive logging              | No observations consolidation
+
+EVEROS               | Python 3.12+, FastAPI, SQLite (WAL), | Markdown-first architecture,
+                     | LanceDB 0.34, APScheduler, structlog, | Three-piece stack (MD + SQLite + LanceDB),
+                     | OpenAI-compatible providers          | Offline memory evolution (OME),
+                     |                                      | Knowledge wiki, orthogonal retrieval,
+                     |                                      | Cascade daemon (file watcher),
+                     |                                      | 
+                     | STRENGTHS: Best error handling (4-branch),| WEAKNESSES: No MCP server,
+                     | Best logging (structlog),              | No web dashboard,
+                     | Tiered testing, three-piece stack      | No data connectors
+
+GRAPHITI             | Python 3.10+, FastAPI, Neo4j 5.26+, | Temporal knowledge graphs,
+                     | FalkorDB 1.1.2, Amazon Neptune,        | Bi-temporal data model (validity windows),
+                     | OpenAI/Anthropic/Gemini/Groq,        | Provenance tracking, custom ontology,
+                     | OpenTelemetry tracing               | Incremental graph construction,
+                     |                                      | Hybrid search (semantic + keyword + graph),
+                     |                                      | 
+                     | STRENGTHS: Bi-temporal tracking,      | WEAKNESSES: No UI,
+                     | Provenance, custom entity types,      | No user profiles,
+                     | Multi-provider architecture          | No observations, requires graph DB
+
+HINDSIGHT            | Python 3.11+, FastAPI, PostgreSQL/pgvector,| Biomimetic memory (world facts, experiences,
+                     | Oracle 23ai, 25+ LLM providers,       | observations, mental models),
+                     | Next.js 16, Rust CLI, uv package mgr, | 60+ integrations, knowledge pages,
+                     | OpenTelemetry, Prometheus           | Single-pass retrieval, disposition traits,
+                     |                                      | Embedded pg0, MCP server per bank,
+                     |                                      | 
+                     | STRENGTHS: Most comprehensive integrations,| WEAKNESSES: No temporal invalidation,
+                     | Biomimetic design, production Helm,    | No code graph support,
+                     | Single-pass retrieval, mental models | Complex architecture
+
+MEM0                 | Python 3.9-3.12, TypeScript, Node 18+, | New memory algorithm (single-pass ADD-only),
+                     | Hatch (Python), pnpm (TS),            | Entity linking, multi-signal retrieval,
+                     | SQLite, PostgreSQL/pgvector, Neo4j,  | Temporal reasoning, agent signup (5-second),
+                     | 30+ vector stores (Qdrant, Pinecone,  | Polyglot monorepo (Python + TS + CLI),
+                     | Chroma, Weaviate, etc.),              | 24 LLMs, 30 vector stores, 15 embedders,
+                     | 24 LLM providers, 15 embedders, 5 rerankers | 
+                     |                                      | STRENGTHS: Provider pattern (most flexible),| WEAKNESSES: No temporal invalidation,
+                     | Strong benchmarks, agent signup flow | No observations, no mental models
+
+SUPERMEMORY          | TypeScript (Bun 1.3.6), Next.js 16, | #1 on all benchmarks (LongMemEval, LoCoMo),
+                     | Hono 4.11.1, Cloudflare Workers,     | Memory + RAG unified, user profiles (~50ms),
+                     | PostgreSQL + Drizzle, Better Auth,  | Automatic forgetting, memory versioning,
+                     | HNSW indexing, Xenova embeddings      | Living knowledge graph, MCP server,
+                     |                                      | Multi-modal processing (PDF, OCR, video),
+                     |                                      | 
+                     | STRENGTHS: Best benchmark performance,    | WEAKNESSES: No temporal invalidation,
+                     | Single API (Memory+RAG+profiles),      | No observations, no markdown-first,
+                     | Local binary zero-config             | Serverless-only (no self-hosted option)
+
+ZEP                  | Python 3.11+, Go 1.26, TypeScript,    | Managed context graphs,
+                     | PostgreSQL/pgvector, Neo4j,          | Temporal knowledge graphs (via Graphiti),
+                     | Zep Cloud (managed service),         | Built-in user management, sub-200ms perf,
+                     | 10+ framework integrations            | Dashboard with visualization,
+                     |                                      | 
+                     | STRENGTHS: Managed platform with SLAs,    | WEAKNESSES: No self-hosted option,
+                     | Proprietary graph engine,            | No local mode,
+                     | Full SDK suite (Python, TS, Go)      | Repository is examples only
+
+LETTA                | TypeScript, App Server, Channels    | Stateful agents with memory,
+                     | (Slack, Telegram, Discord),         | Multi-channel support, cross-device memory,
+                     | Desktop/Web/Mobile apps              | Letta Cloud for managed deployment
+                     |                                      | 
+                     | STRENGTHS: Multi-channel native support,| WEAKNESSES: Minimal in this repo
+                     | Full platform coverage              | (landing page only), no benchmarks
+
+================================================================================
+3. ACTIONABLE FEATURE ADAPTATIONS (WHAT TO STEAL/IMPROVE)
+================================================================================
+
+PRIORITY 1: QUICK WINS (HIGH IMPACT, LOW COMPLEXITY)
+--------------------------------------------------------------
+
+1. MCP SERVER IMPLEMENTATION
+   The Feature/Concept: Model Context Protocol server for AI assistant integration
+   Why it matters: Standard protocol for AI assistant integration. Enables 
+     CommonTrace to work with Claude Code, Cursor, Windsurf, and other MCP 
+     clients without custom integration. All major competitors have this.
+   Implementation Strategy:
+   - Create commontrace/mcp_server.py with MCP tool definitions
+   - Implement tools: search_traces, contribute_trace, get_trace, vote_trace, 
+     amend_trace
+   - Follow Hindsight's MCP implementation pattern (per-bank MCP servers)
+   - Add Docker setup for MCP server deployment
+   - Reference: /root/Test/hindsight/hindsight-api-slim/hindsight_api/api/mcp.py
+   Estimated Effort: 1-2 weeks
+
+2. CLI TOOL WITH AGENT SIGNUP
+   The Feature/Concept: Command-line interface for quick testing and agent signup
+   Why it matters: Enables quick prototyping, testing, and agent-to-agent 
+     communication. Mem0's agent signup flow (no email/dashboard) is innovative.
+   Implementation Strategy:
+   - Create commontrace/cli.py using Typer (Python) or Commander (Node)
+   - Implement commands: init, capture, lesson, recall, sync
+   - Add agent signup: commontrace init --agent --agent-caller <name> 
+     (mints API key in 5 seconds)
+   - Follow Mem0's CLI pattern in /root/Test/mem0/cli/python/mem0_cli/cli.py
+   Estimated Effort: 1 week
+
+3. BASIC DASHBOARD
+   The Feature/Concept: Web dashboard for memory visualization, debugging, monitoring
+   Why it matters: Enables visual inspection of memories, debugging retrieval 
+     results, and monitoring system health. All major competitors have dashboards.
+   Implementation Strategy:
+   - Build Next.js dashboard (follow Cognee's cognee-frontend pattern)
+   - Features: memory browser, search interface, statistics, health status
+   - Connect to Hub API or local store
+   - Reference: /root/Test/cognee/cognee-frontend/ and 
+     /root/Test/hindsight/hindsight-control-plane/
+   Estimated Effort: 2-3 weeks
+
+4. HYBRID SEARCH (SEMANTIC + BM25 + ENTITY)
+   The Feature/Concept: Parallel retrieval strategies with reciprocal rank fusion
+   Why it matters: Combines semantic, keyword, and entity matching for significantly 
+     better accuracy. All competitors except Letta have this. CommonTrace's 
+     current keyword-only retrieval limits multi-hop and summarization performance.
+   Implementation Strategy:
+   - Add BM25 keyword search alongside existing semantic search
+   - Implement entity extraction and entity matching (follow Mem0's entity linking)
+   - Implement reciprocal rank fusion (RRF) for result merging
+   - Add cross-encoder reranking option (follow Hindsight's pattern)
+   - Reference: /root/Test/mem0/mem0/memory/search.py and 
+     /root/Test/hindsight/hindsight-api-slim/hindsight_api/search/fusion.py
+   Estimated Effort: 1-2 weeks
+
+PRIORITY 2: MEDIUM EFFORT (HIGH IMPACT)
+-------------------------------------------
+
+5. USER PROFILES (STATIC + DYNAMIC CONTEXT)
+   The Feature/Concept: Aggregate static facts and dynamic recent activity into 
+     one-call retrieval
+   Why it matters: Provides comprehensive user context in a single API call. 
+     Supermemory achieves ~50ms retrieval for full profiles. Essential for 
+     personalized AI.
+   Implementation Strategy:
+   - Store static facts (name, preferences, demographics) in dedicated table
+   - Track dynamic recent activity (last N actions, recent queries)
+   - Implement profile endpoint that merges both
+   - Cache profiles with TTL for performance
+   - Reference: /root/Test/supermemory/packages/core/src/profile.ts
+   Estimated Effort: 2-3 weeks
+
+6. TEMPORAL REASONING
+   The Feature/Concept: Time-aware retrieval for current state, past events, 
+     and upcoming plans
+   Why it matters: Essential for answering "what's true now" vs "what was true then" 
+     queries. Mem0, Hindsight, and Supermemory all have this.
+   Implementation Strategy:
+   - Add temporal hints to retrieval queries (current, past, future)
+   - Implement time-aware scoring (boost recent facts for "current" queries)
+   - Add temporal filters to search API
+   - Reference: /root/Test/mem0/mem0/memory/retrievers/temporal.py
+   Estimated Effort: 2-3 weeks
+
+7. OBSERVATIONS/REFLECTION
+   The Feature/Concept: Background consolidation of related facts into deduplicated 
+     beliefs with evidence tracking
+   Why it matters: Mimics human memory consolidation. Hindsight's observations 
+     system strengthens/weaken beliefs rather than overwriting them.
+   Implementation Strategy:
+   - Implement background consolidation job (follow EverOS's OME pattern)
+   - Create observations table with belief_id, content, proof_count, evidence_ids
+   - Implement consolidation logic: group related facts, deduplicate, strengthen 
+     with evidence
+   - Add reflect operation to trigger consolidation
+   - Reference: /root/Test/hindsight/hindsight-api-slim/hindsight_api/engine/memories/ and 
+     /root/Test/EverOS/src/everos/core/memory/evolution.py
+   Estimated Effort: 3-4 weeks
+
+8. FRAMEWORK INTEGRATIONS
+   The Feature/Concept: Drop-in wrappers for agent frameworks (LangGraph, CrewAI, 
+     Vercel AI SDK, etc.)
+   Why it matters: Hindsight has 60+ integrations, making it the most adopted. 
+     Start with the most popular frameworks for broad adoption.
+   Implementation Strategy:
+   - Create commontrace/integrations/ directory
+   - Implement LangGraph integration (memory callback)
+   - Implement CrewAI integration (memory tool)
+   - Implement Vercel AI SDK integration (memory provider)
+   - Follow Hindsight's integration pattern in 
+     /root/Test/hindsight/hindsight-integrations/
+   - Reference: /root/Test/hindsight/hindsight-integrations/langgraph/
+   Estimated Effort: 1-2 weeks per integration
+
+PRIORITY 3: ADVANCED CAPABILITIES (HIGH IMPACT, HIGHER COMPLEXITY)
+--------------------------------------------------------------------
+
+9. TEMPORAL FACT INVALIDATION (BI-TEMPORAL MODEL)
+   The Feature/Concept: Facts have validity windows (created_at, expired_at). Old 
+     facts are invalidated, not deleted.
+   Why it matters: Graphiti's unique feature. Enables historical queries 
+     ("what was true in March 2026") without recomputation. Most advanced temporal 
+     tracking.
+   Implementation Strategy:
+   - Add created_at and expired_at columns to facts/lessons tables
+   - Implement validity window logic in retrieval
+   - Add invalidate_fact() operation (sets expired_at)
+   - Query with temporal filters (valid_at query time)
+   - Reference: /root/Test/graphiti/graphiti_core/llm_client/graphiti.py
+   Estimated Effort: 4-6 weeks
+
+10. KNOWLEDGE WIKI/PAGES
+    The Feature/Concept: Editable knowledge documents organized as wiki
+    Why it matters: EverOS and Hindsight have this. Enables curating standing 
+      knowledge, documentation, and best practices.
+    Implementation Strategy:
+    - Create knowledge_pages table with markdown content
+    - Implement CRUD operations for pages
+    - Add wiki-style organization (hierarchy, tags)
+    - Implement auto-refresh based on memory updates
+    - Reference: /root/Test/hindsight/hindsight-api-slim/hindsight_api/engine/mental_models/
+    Estimated Effort: 3-4 weeks
+
+11. MENTAL MODELS
+    The Feature/Concept: Standing answers to questions, auto-refreshed in background
+    Why it matters: Hindsight's unique feature. Caches frequently asked questions 
+      as database reads. Reduces LLM calls for common queries.
+    Implementation Strategy:
+    - Create mental_models table with question, answer, refresh_schedule
+    - Implement background refresh job (run LLM to regenerate answer)
+    - Add mental model retrieval (check before expensive recall)
+    - Integrate with knowledge pages
+    - Reference: /root/Test/hindsight/hindsight-api-slim/hindsight_api/engine/mental_models/
+    Estimated Effort: 3-4 weeks
+
+12. DATA CONNECTORS
+    The Feature/Concept: Bulk data ingestion from Google Drive, Gmail, Notion, 
+      GitHub with real-time webhooks
+    Why it matters: Cognee and Supermemory have this. Enables importing existing 
+      knowledge bases without manual entry.
+    Implementation Strategy:
+    - Create commontrace/connectors/ directory
+    - Implement Google Drive connector (OAuth, file watching)
+    - Implement Gmail connector (email import)
+    - Implement GitHub connector (repo import, webhook on push)
+    - Follow Cognee's pattern in /root/Test/cognee/cognee/data_storages/
+    - Reference: /root/Test/cognee/cognee/data_storages/google_drive.py
+    Estimated Effort: 2-3 weeks per connector
+
+13. BENCHMARKING FRAMEWORK
+    The Feature/Concept: Standardized evaluation with LoCoMo, LongMemEval, BEAM 
+      datasets
+    Why it matters: EverOS, Hindsight, Mem0, Supermemory all have this. Enables 
+      reproducible performance comparison and tracking improvements.
+    Implementation Strategy:
+    - Create commontrace/benchmarks/ directory
+    - Download LoCoMo, LongMemEval, BEAM datasets
+    - Implement evaluation harness (run queries, judge answers)
+    - Add CI job to run benchmarks on PR
+    - Follow Hindsight's AMB pattern or Supermemory's MemoryBench
+    - Reference: /root/Test/hindsight/hindsight-system-evals/ and 
+      /root/Test/supermemory/packages/memory-bench/
+    Estimated Effort: 4-6 weeks
+
+14. MIGRATION TOOLS
+    The Feature/Concept: Import/export from other memory systems (Mem0, Letta, Zep, 
+      Graphiti)
+    Why it matters: Cognee's unique feature with COGX exchange format. Enables 
+      switching to CommonTrace without data loss.
+    Implementation Strategy:
+    - Define COGX exchange format (JSON schema for memories/lessons)
+    - Implement import from Mem0, Letta, Zep, Graphiti
+    - Implement export to COGX
+    - Add CLI commands: commontrace import, commontrace export
+    - Reference: /root/Test/cognee/cognee/migration/
+    Estimated Effort: 2-3 weeks
+
+PRIORITY 4: UNIQUE DIFFERENTIATORS
+------------------------------------
+
+15. MARKDOWN-FIRST ARCHITECTURE
+    The Feature/Concept: Canonical .md files as source of truth with cascade sync 
+      to index
+    Why it matters: EverOS's unique feature. Editable, diffable, Git-versioned 
+      memory. Direct file editing with automatic index sync.
+    Implementation Strategy:
+    - Store lessons/traces as markdown files in memory/ (already partially done)
+    - Implement file watcher (watchdog) with 500ms debounce
+    - Cascade daemon syncs markdown changes to database
+    - Add commontrace edit CLI command for direct file editing
+    - Reference: /root/Test/EverOS/src/everos/core/memory/cascade.py
+    Estimated Effort: 4-6 weeks
+
+16. CODE GRAPH SUPPORT
+    The Feature/Concept: AST-aware code analysis for deterministic code graph 
+      construction
+    Why it matters: Cognee's unique feature. Enables understanding code structure, 
+      dependencies, and relationships.
+    Implementation Strategy:
+    - Add code graph extraction route (separate from general text)
+    - Use AST parsing (Python, TypeScript, etc.)
+    - Extract functions, classes, imports, call relationships
+    - Build graph with code entities and edges
+    - Reference: /root/Test/cognee/cognee/pipelines/code_graph/
+    Estimated Effort: 4-6 weeks
+
+17. LOCAL/OFFLINE MODE
+    The Feature/Concept: Keyless operation with local models (GLiNER extraction + 
+      local embeddings)
+    Why it matters: Cognee's unique feature. Enables LLM-free workflows, 
+      air-gapped deployment, and cost savings.
+    Implementation Strategy:
+    - Add GLiNER local model for entity extraction
+    - Add FastEmbed or SentenceTransformers for local embeddings
+    - Make LLM calls optional (graceful degradation)
+    - Add --local flag to CLI/Hub
+    - Reference: /root/Test/cognee/cognee/pipelines/extractors/gliner.py
+    Estimated Effort: 3-4 weeks
+
+18. AGENT SIGNUP FLOW
+    The Feature/Concept: 5-second agent signup without email/dashboard
+    Why it matters: Mem0's unique feature. Great for agent-to-agent communication 
+      and automated agent fleets.
+    Implementation Strategy:
+    - Implement agent signup endpoint (no email verification)
+    - Mint API key immediately
+    - Store agent metadata (name, caller)
+    - Add rate limiting to prevent abuse
+    - Reference: /root/Test/mem0/cli/python/mem0_cli/cli.py (agent signup logic)
+    Estimated Effort: 1-2 weeks
+
+================================================================================
+4. TECHNICAL DEBT & OPTIMIZATION WINS
+================================================================================
+
+PRIORITY 1: ERROR HANDLING IMPROVEMENTS
+----------------------------------------
+
+1. ADOPT EVEROS'S FOUR-BRANCH EXCEPTION HIERARCHY
+   Current State: Basic exception handling
+   Improvement: Implement structured exception hierarchy:
+   
+   class DomainError(CommontraceError):  # Client errors, 4xx
+       pass
+   
+   class InfrastructureError(CommontraceError):  # Transient, retryable, 503
+       pass
+   
+   class CapabilityError(CommontraceError):  # Permanent, not retryable, 503
+       pass
+   
+   class ConfigurationError(CommontraceError):  # Misconfiguration, 500
+       pass
+   
+   Implementation: Create commontrace/exceptions.py with hierarchy, add HTTP 
+     status mapping in FastAPI handlers.
+   Reference: /root/Test/EverOS/src/everos/core/errors.py (264 lines)
+
+2. IMPLEMENT COGNEE'S REMEDIATION SYSTEM
+   Current State: No remediation hints
+   Improvement: Add remediation field to base exception with substring-based 
+     error hints:
+   
+   class CogneeApiError(Exception):
+       def __init__(self, message, name, status_code, log_level, remediation):
+           self.remediation = remediation
+           # Auto-log on initialization
+   
+   Implementation: Create commontrace/remediation.py with hint table for common 
+     failures (API keys, missing deps, model errors).
+   Reference: /root/Test/cognee/cognee/exceptions/remediation.py
+
+PRIORITY 2: LOGGING AND OBSERVABILITY
+--------------------------------------
+
+3. ADOPT EVEROS'S STRUCTLOG PATTERN
+   Current State: Basic Python logging
+   Improvement: Implement structured logging with context:
+   
+   structlog.configure(
+       processors=[
+           structlog.contextvars.merge_contextvars,
+           structlog.processors.add_log_level,
+           structlog.processors.TimeStamper(fmt="iso"),
+           structlog.stdlib.ProcessorFormatter.wrap_for_formatter,
+       ],
+       logger_factory=structlog.stdlib.LoggerFactory(),
+   )
+   
+   Implementation: Add commontrace/logging.py with structlog setup, add 
+     request_id, user_id context to all logs.
+   Reference: /root/Test/EverOS/src/everos/core/observability/logging/factory.py
+
+4. IMPLEMENT COGNEE'S DUAL OUTPUT
+   Current State: Console only
+   Improvement: Add rotating file handler for production:
+   
+   file_handler = RotatingFileHandler(
+       "commontrace.log",
+       maxBytes=50 * 1024 * 1024,  # 50MB
+       backupCount=5,  # 250MB cap
+   )
+   
+   Implementation: Add file handler to logging config, implement automatic log 
+     cleanup (keep 10 most recent).
+   Reference: /root/Test/cognee/cognee/shared/logging_utils.py (694 lines)
+
+5. ADD HEALTH ENDPOINTS
+   Current State: No health checks
+   Improvement: Implement liveness and readiness endpoints:
+   
+   @app.get("/health/live")
+   async def health_live():
+       return {"status": "ok"}  # Process-only
+   
+   @app.get("/health")
+   async def health():
+       # Check database, vector store, etc.
+       if db.is_connected():
+           return {"status": "ready", "database": "ok"}
+       return {"status": "not_ready", "database": "error"}, 503
+   
+   Implementation: Add endpoints to Hub API, follow Hindsight's pattern.
+   Reference: /root/Test/hindsight/hindsight-api-slim/hindsight_api/api/http.py
+
+PRIORITY 3: TESTING STRATEGY
+------------------------------
+
+6. IMPLEMENT EVEROS'S TIERED TESTING
+   Current State: Basic pytest tests
+   Improvement: Implement three-tier testing:
+   - Unit tests (fast, no external deps)
+   - Integration tests (with real databases)
+   - E2E tests (full API surface)
+   
+   Implementation: Add pytest marks (@pytest.mark.unit, @pytest.mark.integration, 
+     @pytest.mark.e2e), separate test directories, add coverage threshold 
+     (80% minimum).
+   Reference: /root/Test/EverOS/tests/ (100+ test files)
+
+7. ADD COVERAGE THRESHOLDS
+   Current State: No coverage gating
+   Improvement: Add 80% minimum coverage gate in CI:
+   
+   - name: coverage
+     run: pytest --cov=commontrace --cov-report=xml --cov-fail-under=80
+   
+   Implementation: Add coverage job to CI, separate unit vs integration coverage.
+
+8. IMPLEMENT RATE LIMITING TESTS
+   Current State: No rate limit testing
+   Improvement: Add realistic rate limit tests:
+   
+   @pytest.mark.integration
+   def test_rate_limit_enforcement():
+       # Send requests until 429, verify cooldown
+       for _ in range(100):
+           response = client.recall(query)
+           if response.status_code == 429:
+               break
+       assert response.headers["Retry-After"]
+   
+   Implementation: Follow Cognee's rate limit test pattern.
+   Reference: /root/Test/cognee/tests/test_rate_limiting.py
+
+PRIORITY 4: CI/CD BEST PRACTICES
+-------------------------------
+
+9. ADOPT EVEROS'S MAKEFILE WRAPPER
+   Current State: Direct commands in CI
+   Improvement: Make CI a thin wrapper over Makefile targets:
+   
+   - name: test
+     run: make test
+   
+   Implementation: Create Makefile with targets for test, lint, build, deploy. 
+     Update CI to call Makefile.
+   Reference: /root/Test/EverOS/Makefile
+
+10. IMPLEMENT PATH-BASED FILTERING
+    Current State: CI runs on all changes
+    Improvement: Skip jobs when no relevant changes (Mem0 pattern):
     
-    def get(self, key):
-        with self._lock:
-            if key in self._cache:
-                entry = self._cache[key]
-                if entry.proxy() is not None:
-                    return entry.proxy()
-        return None
-```
-- **Value:** Solves resource management problem for database connections and file handles
-
-### Pattern 2: Interface-Based Database Adapter Pattern (Cognee, Graphiti)
-- **File:** `cognee/infrastructure/databases/graph/graph_db_interface.py:36-575`
-- **Lines:** 36-575
-- **Description:** Abstract base class defining contract for all backends with capability flags
-- **Code Example:**
-```python
-class GraphDBInterface(ABC):
-    @abstractmethod
-    async def add_nodes(self, nodes: List[Node]) -> None:
-        pass
+    - name: test
+      if: github.event_name == 'push' && steps.changes.outputs.test == 'false'
+      run: pytest
     
-    @abstractmethod
-    async def search_nodes(self, query: str) -> List[Node]:
-        pass
+    Implementation: Add path filtering logic, use GitHub Actions changes API.
+    Reference: /root/Test/mem0/.github/workflows/ci.yml
+
+11. ADD SECURITY SCANNING
+    Current State: No security scanning
+    Improvement: Add multiple security scanners:
+    - CodeQL analysis (Graphiti pattern)
+    - OSSF Scorecard (Cognee pattern)
+    - Trivy image scanning (Hindsight pattern)
     
-    @property
-    @abstractmethod
-    def capabilities(self) -> Set[str]:
-        return {"search", "add", "delete"}
-```
-- **Value:** Enables true multi-backend support without coupling to specific database
+    Implementation: Add CodeQL workflow, Scorecard workflow, Trivy workflow to 
+      .github/workflows/.
+    Reference: 
+    - /root/Test/graphiti/.github/workflows/codeql.yml
+    - /root/Test/cognee/.github/workflows/scorecard.yml
+    - /root/Test/hindsight/.github/workflows/security-scan.yml
 
-### Pattern 3: Phased Batch Processing Pipeline (Mem0)
-- **File:** `mem0/memory/main.py:918-1220`
-- **Lines:** 918-1220
-- **Description:** Breaks operations into distinct phases with batch processing and graceful fallbacks
-- **Code Example:**
-```python
-async def add_memories(self, memories: List[Memory]):
-    # Phase 0: Context gathering
-    context = await self._gather_context(memories)
+PRIORITY 5: SECURITY PROTOCOLS
+-----------------------------
+
+12. IMPLEMENT CLEAR THREAT MODEL
+    Current State: Basic SECURITY.md
+    Improvement: Document supported versions, vulnerability reporting process, threat 
+      model following EverOS pattern.
     
-    # Phase 1: Existing memory retrieval
-    existing = await self._retrieve_existing(context)
+    Implementation: Update SECURITY.md with:
+    - Supported versions policy
+    - Private reporting email
+    - AI disclosure policy (Mem0 pattern)
+    - CVSS-based patching (Hindsight pattern)
+    Reference: /root/Test/EverOS/SECURITY.md
+
+13. ADD SUPPLY CHAIN SECURITY
+    Current State: No supply chain scanning
+    Improvement: Implement OSSF Scorecard, dependency scanning, SBOM generation.
     
-    # Phase 2: LLM extraction (single call for all)
-    extracted = await self._llm_extract_batch(memories, existing)
+    Implementation: Add Scorecard workflow, integrate with CI.
+    Reference: /root/Test/cognee/.github/workflows/scorecard.yml
+
+14. IMPLEMENT RATE LIMITING
+    Current State: Hub has rate limiting but no auto-detection
+    Improvement: Auto-detect rate limits (429, 503, 529) and implement cooldown-based 
+      pacing (Cognee pattern):
     
-    # Phase 3: Batch embedding
-    embeddings = await self._embed_batch(extracted)
+    @asynccontextmanager
+    async def _governed_llm_dispatch():
+        pace = llm_config.llm_rate_limit_enabled or llm_overload_policy.is_paced()
+        async with _get_llm_rate_limiter() if pace else nullcontext():
+            try:
+                yield
+            except Exception as error:
+                if llm_config.auto_rate_limit:
+                    llm_overload_policy.on_error(error)
+                raise
     
-    # Phase 4-5: CPU processing and deduplication
-    processed = await self._process_and_deduplicate(embeddings)
-```
-- **Value:** Reduces expensive operations (LLM calls) by 10-100x through batching
+    Implementation: Add overload policy class, integrate with LLM calls.
+    Reference: /root/Test/cognee/cognee/pipelines/llm_dispatch.py
 
-### Pattern 4: Hybrid Scoring with Adaptive Normalization (Mem0)
-- **File:** `mem0/utils/scoring.py:60-139`
-- **Lines:** 60-139
-- **Description:** Additive scoring combining semantic + BM25 + entity boosts with adaptive normalization
-- **Code Example:**
-```python
-def hybrid_score(semantic_score, bm25_score, entity_boost, query_length):
-    # Adaptive normalization based on query complexity
-    tail_ratio = min(1.0, query_length / 10.0)
+PRIORITY 6: DEPLOYMENT INFRASTRUCTURE
+------------------------------------
+
+15. IMPLEMENT HELM CHARTS
+    Current State: Docker Compose only
+    Improvement: Create production Helm chart with:
+    - Health probes (readiness, liveness)
+    - Resource limits (CPU, memory)
+    - Security contexts (non-root, drop capabilities)
+    - Pod disruption budgets
+    - Network policies
+    - Service monitors (Prometheus)
     
-    # Additive combination
-    score = (
-        semantic_score * 0.5 +
-        bm25_score * 0.3 +
-        entity_boost * 0.2
-    )
+    Implementation: Create deploy/helm/commontrace-hub/ following Hindsight's pattern.
+    Reference: /root/Test/hindsight/helm/hindsight/
+
+16. ADD DOCKER COMPOSE FOR LOCAL DEVELOPMENT
+    Current State: Basic docker-compose.yml
+    Improvement: Enhance with all required services, health checks, and development 
+      overrides.
     
-    # Normalize to [0, 1]
-    return min(1.0, max(0.0, score))
-```
-- **Value:** Flexible multi-signal retrieval that adapts to available data
+    Implementation: Update docker-compose.yml with development profile, add 
+      environment file template.
+    Reference: /root/Test/cognee/docker-compose.yml
 
-### Pattern 5: Secret Redaction with Layered Approach (Mem0)
-- **File:** `mem0/memory/main.py:254-298`
-- **Lines:** 254-298
-- **Description:** Layered secret detection (allowlist + exact deny + pattern matching) with runtime object preservation
-- **Code Example:**
-```python
-_SENSITIVE_FIELDS_EXACT = frozenset({
-    "api_key", "secret_key", "password", "token"
-})
+17. IMPLEMENT SECRETS MANAGEMENT
+    Current State: Environment variables only
+    Improvement: Support _FILE pattern for secrets (Hindsight pattern):
+    
+    HUB_DATABASE_URL_FILE=/run/secrets/db_url
+    
+    Implementation: Add secrets provider that reads from files, update Hub config 
+      to support both env var and file variant.
+    Reference: /root/Test/hindsight/hindsight-api-slim/hindsight_api/config.py 
+      (secrets_provider.py)
 
-_SENSITIVE_SUFFIXES = (
-    "_password", "_secret", "_token"
-)
+PRIORITY 7: PERFORMANCE OPTIMIZATIONS
+-------------------------------------
 
-def redact_secrets(data: dict) -> dict:
-    redacted = {}
-    for key, value in data.items():
-        if key in _SENSITIVE_FIELDS_EXACT:
-            redacted[key] = "***REDACTED***"
-        elif key.endswith(_SENSITIVE_SUFFIXES):
-            redacted[key] = "***REDACTED***"
-        else:
-            redacted[key] = value
-    return redacted
-```
-- **Value:** Comprehensive secret detection for logging/telemetry safety
-
-### Pattern 6: Identity Key Protection (Mem0)
-- **File:** `mem0/memory/main.py:135-162`
-- **Lines:** 135-162
-- **Description:** Prevents privilege escalation by enforcing scoping through dedicated parameters only
-- **Code Example:**
-```python
-_IDENTITY_KEYS = frozenset({
-    "user_id", "session_id", "agent_id"
-})
-
-def strip_identity_keys(metadata: dict) -> dict:
-    """Remove identity keys to prevent privilege escalation."""
-    return {
-        k: v for k, v in metadata.items()
-        if k not in _IDENTITY_KEYS
-    }
-
-def add_memory(self, text: str, user_id: str, metadata: dict):
-    # user_id passed as dedicated parameter, not in metadata
-    metadata = strip_identity_keys(metadata)
-    # ... rest of implementation
-```
-- **Value:** Critical security pattern for multi-tenant systems
-
-### Pattern 7: Create-Then-Catch-Conflict for Idempotent Provisioning (Zep)
-- **File:** `/root/Test/zep/integrations/langgraph/python/src/zep_langgraph/provisioning.py:79-141`
-- **Lines:** 79-141
-- **Description:** Idempotently ensures resources exist by calling create directly and treating conflict errors as success
-- **Code Example:**
-```python
-async def ensure_session_exists(self, session_id: str):
-    try:
-        await self.client.memory.add_session(
-            session_id=session_id,
-            user_id=self.user_id
+18. IMPLEMENT PIPELINE RECOVERY
+    Current State: No crash recovery
+    Improvement: Preserve completed documents across crashes (Cognee pattern):
+    
+    async def add(data, dataset_name, incremental_loading=True, run_in_background=False):
+        pipeline_run = await run_pipeline(
+            tasks,
+            dataset_name=dataset_name,
+            incremental_loading=incremental_loading,
         )
-    except ConflictError:
-        # Session already exists, which is fine
-        pass
-    return session_id
-```
-- **Value:** Eliminates race conditions from check-then-create pattern
-
-### Pattern 8: Pin-or-Expose for Tool Parameter Control (Zep)
-- **File:** `/root/Test/zep/integrations/langgraph/python/src/zep_langgraph/tools.py:67-123`
-- **Lines:** 67-123
-- **Description:** Fine-grained control over which tool parameters the model can set (pinned, hidden, exposed)
-- **Code Example:**
-```python
-class ToolParamConfig:
-    pinned: List[str] = Field(default_factory=list)
-    hidden: List[str] = Field(default_factory=list)
-    exposed: List[str] = Field(default_factory=list)
-
-def configure_tool(self, config: ToolParamConfig):
-    # Pinned: model cannot set these
-    # Hidden: model cannot see these
-    # Exposed: model can set these
-    pass
-```
-- **Value:** Prevents model from choosing dangerous parameters
-
-### Pattern 9: Defense-in-Depth Path Traversal Protection (EverOS)
-- **File:** `src/everos/core/persistence/markdown/path_safety.py:38-83`
-- **Lines:** 38-83
-- **Description:** Multi-layer path sanitization with NFC normalization, character filtering, and degenerate value fallback
-- **Code Example:**
-```python
-def sanitize_dirname(dirname: str) -> str:
-    # NFC normalization
-    normalized = unicodedata.normalize('NFC', dirname)
+        if run_in_background:
+            return pipeline_run  # Fire-and-forget with drain on shutdown
     
-    # Character filtering
-    allowed_chars = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_")
-    filtered = ''.join(c for c in normalized if c in allowed_chars)
+    Implementation: Add pipeline state tracking, implement background task drain 
+      on shutdown.
+    Reference: /root/Test/cognee/cognee/pipelines/orchestrator.py
+
+19. IMPLEMENT MULTI-SIGNAL RETRIEVAL
+    Current State: Keyword-only retrieval
+    Improvement: Parallel semantic + BM25 + entity retrieval with RRF fusion:
     
-    # Degenerate value fallback
-    if not filtered or filtered in ('.', '..'):
-        return 'default'
+    semantic_scores = vector_search(query)
+    bm25_scores = bm25_search(query)
+    entity_scores = entity_search(query)
+    final_scores = reciprocal_rank_fusion(semantic_scores, bm25_scores, entity_scores)
     
-    return filtered
-```
-- **Value:** Prevents CWE-22 path traversal attacks with idempotent sanitization
+    Implementation: Add BM25 search, entity extraction, RRF fusion, cross-encoder 
+      reranking.
+    Reference: /root/Test/mem0/mem0/memory/search.py and 
+      /root/Test/hindsight/hindsight-api-slim/hindsight_api/search/fusion.py
 
-### Pattern 10: Import-Linter Architecture Enforcement (EverOS)
-- **File:** `pyproject.toml:245-335`
-- **Lines:** 245-335
-- **Description:** Automated enforcement of architectural rules using import-linter contracts
-- **Code Example:**
-```toml
-[tool.import-linter]
-contracts = [
-    "LayeredArchitecture",
-    "SubpackagePrivacy",
-    "PortIsolation",
-    "OMEIndependence"
-]
-
-[[tool.import-linter.contracts.LayeredArchitecture]]
-type = "forbidden"
-from_modules = ["entrypoints"]
-forbidden_modules = ["infra", "memory"]
-```
-- **Value:** Prevents architectural drift by automatically detecting violations
-
-### Pattern 11: Semaphore-Bounded Concurrency Control (Graphiti)
-- **File:** `graphiti_core/helpers.py:122-133`
-- **Lines:** 122-133
-- **Description:** Wrapper around asyncio.gather that bounds concurrent operations using a semaphore
-- **Code Example:**
-```python
-async def bounded_gather(*coros, max_concurrency=10):
-    semaphore = asyncio.Semaphore(max_concurrency)
+20. IMPLEMENT PROVIDER PATTERN
+    Current State: Hardcoded providers
+    Improvement: Implement pluggable provider pattern with factory:
     
-    async def run_with_limit(coro):
-        async with semaphore:
-            return await coro
+    class LlmFactory:
+        @staticmethod
+        def create(config: LLMConfig):
+            if config.provider == "openai":
+                return OpenAILLM(config)
+            elif config.provider == "anthropic":
+                return AnthropicLLM(config)
     
-    return await asyncio.gather(*(run_with_limit(c) for coro in coros))
-```
-- **Value:** Prevents runaway concurrency while maintaining parallelism benefits
+    Implementation: Create provider base classes, register providers in __init__.py, 
+      add config registration.
+    Reference: /root/Test/mem0/mem0/llms/providers/
 
-### Pattern 12: Safe SQLite + JSON Cache (Graphiti)
-- **File:** `graphiti_core/llm_client/cache.py:27-68`
-- **Lines:** 27-68
-- **Description:** Replaces unsafe pickle-based caching with SQLite + JSON serialization
-- **Code Example:**
-```python
-class SafeCache:
-    def __init__(self, db_path: str):
-        self.conn = sqlite3.connect(db_path)
-        self.conn.execute("""
-            CREATE TABLE IF NOT EXISTS cache (
-                key TEXT PRIMARY KEY,
-                value TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
+21. IMPLEMENT MULTI-TENANCY ISOLATION
+    Current State: Single database
+    Improvement: Per-user/dataset database isolation with access control 
+      (Cognee pattern):
     
-    def get(self, key: str):
-        row = self.conn.execute(
-            "SELECT value FROM cache WHERE key = ?", (key,)
-        ).fetchone()
-        if row:
-            return json.loads(row[0])
-        return None
+    if ENABLE_BACKEND_ACCESS_CONTROL:
+        # Separate graph/vector DB per dataset
+        backend = get_backend(dataset_id, owner_id)
     
-    def set(self, key: str, value: Any):
-        self.conn.execute(
-            "INSERT OR REPLACE INTO cache (key, value) VALUES (?, ?)",
-            (key, json.dumps(value))
-        )
-        self.conn.commit()
-```
-- **Value:** Eliminates critical security vulnerability (unsafe pickle deserialization)
-
-### Pattern 13: Defense-in-Depth Input Validation (Graphiti)
-- **File:** `graphiti_core/search/search_filters.py:69-73, 94-95`
-- **Lines:** 69-73, 94-95
-- **Description:** Multiple validation layers including Pydantic field validators and runtime checks
-- **Code Example:**
-```python
-class SearchFilter(BaseModel):
-    group_id: str = Field(..., pattern=r'^[a-zA-Z0-9_-]+$')
-    
-    @validator('group_id')
-    def validate_group_id(cls, v):
-        if not re.match(r'^[a-zA-Z0-9_-]+$', v):
-            raise ValueError("Invalid group_id format")
-        return v
-
-# Runtime check
-def sanitize_label(label: str) -> str:
-    if not re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', label):
-        raise ValueError("Invalid label format")
-    return label
-```
-- **Value:** Prevents injection attacks even if validation is bypassed
-
-### Pattern 14: Extension-Based Authentication/Authorization (Hindsight)
-- **File:** `hindsight-api-slim/hindsight_api/extensions/base.py:1-130`
-- **Lines:** 1-130
-- **Description:** Extension system allows pluggable authentication/authorization via TenantExtension
-- **Code Example:**
-```python
-class TenantExtension(ABC):
-    @abstractmethod
-    async def authenticate(self, request: Request) -> Optional[User]:
-        pass
-    
-    @abstractmethod
-    async def authorize(self, user: User, resource: str, action: str) -> bool:
-        pass
-
-class JWTAuthExtension(TenantExtension):
-    async def authenticate(self, request: Request) -> Optional[User]:
-        token = request.headers.get("Authorization")
-        if not token:
-            return None
-        return await self._verify_jwt(token)
-```
-- **Value:** Enables flexible auth strategies without core changes
-
-### Pattern 15: Multi-Layer Caching with TTL and Coalescing (Hindsight)
-- **File:** `hindsight-api-slim/hindsight_api/engine/bank_stats_cache.py:31-150`
-- **Lines:** 31-150
-- **Description:** TTL cache with LRU eviction and in-flight request coalescing
-- **Code Example:**
-```python
-class CoalescingCache:
-    def __init__(self, ttl: int = 60):
-        self.cache = {}
-        self.in_flight = {}
-        self.ttl = ttl
-    
-    async def get(self, key: str):
-        # Check cache
-        if key in self.cache:
-            entry = self.cache[key]
-            if time.time() - entry.timestamp < self.ttl:
-                return entry.value
-        
-        # Check in-flight
-        if key in self.in_flight:
-            return await self.in_flight[key]
-        
-        # Create new future
-        future = asyncio.Future()
-        self.in_flight[key] = future
-        
-        # Compute value
-        value = await self._compute(key)
-        
-        # Cache and resolve
-        self.cache[key] = CacheEntry(value, time.time())
-        future.set_result(value)
-        del self.in_flight[key]
-        
-        return value
-```
-- **Value:** Prevents thundering herd on expensive aggregations
-
----
-
-## PART 3: SYNTHESIS - ACTIONABLE RECOMMENDATIONS
-
-### Priority 1: Security Hardening (High Impact, Medium Effort)
-
-**1. Implement Secret Manager Integration**
-- **Inspired by:** All competitors (centralized secret management gap)
-- **Implementation:**
-```python
-# hub/secrets_provider.py
-import os
-from typing import Optional
-from abc import ABC, abstractmethod
-
-class SecretProvider(ABC):
-    @abstractmethod
-    async def get_secret(self, key: str) -> Optional[str]:
-        pass
-
-class EnvSecretProvider(SecretProvider):
-    async def get_secret(self, key: str) -> Optional[str]:
-        return os.environ.get(key)
-
-class VaultSecretProvider(SecretProvider):
-    def __init__(self, vault_addr: str, token: str):
-        self.vault_addr = vault_addr
-        self.token = token
-    
-    async def get_secret(self, key: str) -> Optional[str]:
-        # HashiCorp Vault integration
-        async with httpx.AsyncClient() as client:
-            response = await client.get(
-                f"{self.vault_addr}/v1/secret/data/{key}",
-                headers={"X-Vault-Token": self.token}
-            )
-            return response.json()["data"]["value"]
-```
-- **Benefit:** Centralized secret management with automatic rotation
-
-**2. Add Gateway Token Rotation**
-- **Inspired by:** Zep's create-then-catch-conflict pattern
-- **Implementation:**
-```python
-# commontrace/gateway.py
-import secrets
-import time
-from pathlib import Path
-
-class GatewayTokenManager:
-    def __init__(self, token_path: Path, ttl_hours: int = 24):
-        self.token_path = token_path
-        self.ttl_hours = ttl_hours
-    
-    def get_or_create_token(self) -> str:
-        if self.token_path.exists():
-            token_data = json.loads(self.token_path.read_text())
-            created_at = token_data["created_at"]
-            if time.time() - created_at < self.ttl_hours * 3600:
-                return token_data["token"]
-        
-        # Create new token
-        token = secrets.token_urlsafe(32)
-        self.token_path.write_text(json.dumps({
-            "token": token,
-            "created_at": time.time()
-        }))
-        self.token_path.chmod(0o600)
-        return token
-    
-    def revoke_token(self):
-        if self.token_path.exists():
-            self.token_path.unlink()
-```
-- **Benefit:** Token expiration and rotation for compromised tokens
-
-**3. Add XSS Protection**
-- **Inspired by:** Mem0's input sanitization gap
-- **Implementation:**
-```python
-# commontrace/sanitize.py
-import bleach
-
-def sanitize_html(content: str) -> str:
-    """Sanitize HTML to prevent XSS attacks."""
-    return bleach.clean(
-        content,
-        tags=[],  # No HTML tags allowed
-        strip=True
-    )
-
-def sanitize_markdown(content: str) -> str:
-    """Sanitize markdown, allowing only safe formatting."""
-    return bleach.clean(
-        content,
-        tags=["b", "i", "em", "strong", "code", "pre"],
-        strip=True
-    )
-```
-- **Benefit:** XSS protection for web rendering
-
-### Priority 2: Performance Optimization (High Impact, Medium Effort)
-
-**4. Implement Query Result Caching**
-- **Inspired by:** Hindsight's multi-layer caching
-- **Implementation:**
-```python
-# commontrace/query_cache.py
-import hashlib
-import json
-import time
-from typing import Any, Optional
-
-class QueryResultCache:
-    def __init__(self, ttl: int = 300):
-        self.cache = {}
-        self.ttl = ttl
-    
-    def _hash_query(self, query: str, params: dict) -> str:
-        key = f"{query}:{json.dumps(params, sort_keys=True)}"
-        return hashlib.sha256(key.encode()).hexdigest()
-    
-    def get(self, query: str, params: dict) -> Optional[Any]:
-        key = self._hash_query(query, params)
-        if key in self.cache:
-            entry = self.cache[key]
-            if time.time() - entry["timestamp"] < self.ttl:
-                return entry["result"]
-        return None
-    
-    def set(self, query: str, params: dict, result: Any):
-        key = self._hash_query(query, params)
-        self.cache[key] = {
-            "result": result,
-            "timestamp": time.time()
-        }
-```
-- **Benefit:** Semantic caching for retrieval results
-
-**5. Add HTTP Connection Pooling for Gateway**
-- **Inspired by:** EverOS's connection pooling
-- **Implementation:**
-```python
-# commontrace/gateway_transport.py
-import httpx
-
-class PooledHTTPClient:
-    def __init__(self, pool_size: int = 10):
-        self.client = httpx.Client(
-            limits=httpx.Limits(max_connections=pool_size),
-            timeout=30.0
-        )
-    
-    def close(self):
-        self.client.close()
-```
-- **Benefit:** HTTP connection reuse for gateway
-
-**6. Expand Async Patterns**
-- **Inspired by:** Graphiti's async/await throughout
-- **Implementation:**
-```python
-# Convert synchronous operations to async
-import aiosqlite
-
-async def async_lesson_list(store_path: str) -> List[Lesson]:
-    async with aiosqlite.connect(store_path) as db:
-        db.row_factory = aiosqlite.Row
-        cursor = await db.execute("SELECT * FROM lessons")
-        rows = await cursor.fetchall()
-        return [Lesson.from_row(row) for row in rows]
-```
-- **Benefit:** Non-blocking I/O throughout codebase
-
-### Priority 3: Architecture Improvements (Medium Impact, High Effort)
-
-**7. Implement Circuit Breaker Pattern**
-- **Inspired by:** EverOS's gap (no circuit breaker)
-- **Implementation:**
-```python
-# commontrace/circuit_breaker.py
-import time
-from enum import Enum
-
-class CircuitState(Enum):
-    CLOSED = "closed"
-    OPEN = "open"
-    HALF_OPEN = "half_open"
-
-class CircuitBreaker:
-    def __init__(self, failure_threshold: int = 5, timeout: int = 60):
-        self.failure_threshold = failure_threshold
-        self.timeout = timeout
-        self.state = CircuitState.CLOSED
-        self.failure_count = 0
-        self.last_failure_time = 0
-    
-    async def call(self, func, *args, **kwargs):
-        if self.state == CircuitState.OPEN:
-            if time.time() - self.last_failure_time > self.timeout:
-                self.state = CircuitState.HALF_OPEN
-            else:
-                raise CircuitBreakerOpenError("Circuit breaker is open")
-        
-        try:
-            result = await func(*args, **kwargs)
-            if self.state == CircuitState.HALF_OPEN:
-                self.state = CircuitState.CLOSED
-                self.failure_count = 0
-            return result
-        except Exception as e:
-            self.failure_count += 1
-            self.last_failure_time = time.time()
-            if self.failure_count >= self.failure_threshold:
-                self.state = CircuitState.OPEN
-            raise
-```
-- **Benefit:** Automatic failover between providers
-
-**8. Add Event System for Mutations**
-- **Inspired by:** Graphiti's gap (no event system)
-- **Implementation:**
-```python
-# commontrace/events.py
-from typing import Callable, Any
-from dataclasses import dataclass
-
-@dataclass
-class Event:
-    type: str
-    data: Any
-
-class EventBus:
-    def __init__(self):
-        self.subscribers = {}
-    
-    def subscribe(self, event_type: str, handler: Callable):
-        if event_type not in self.subscribers:
-            self.subscribers[event_type] = []
-        self.subscribers[event_type].append(handler)
-    
-    async def publish(self, event: Event):
-        handlers = self.subscribers.get(event.type, [])
-        for handler in handlers:
-            await handler(event)
-```
-- **Benefit:** Decoupled architecture with pub/sub
-
-**9. Implement Plugin System**
-- **Inspired by:** Mem0's gap (limited plugin system)
-- **Implementation:**
-```python
-# commontrace/plugins.py
-from typing import Callable, Any
-
-class Plugin:
-    def __init__(self, name: str):
-        self.name = name
-        self.hooks = {}
-    
-    def register_hook(self, hook_name: str, handler: Callable):
-        if hook_name not in self.hooks:
-            self.hooks[hook_name] = []
-        self.hooks[hook_name].append(handler)
-    
-    async def execute_hook(self, hook_name: str, *args, **kwargs):
-        handlers = self.hooks.get(hook_name, [])
-        for handler in handlers:
-            await handler(*args, **kwargs)
-
-class PluginManager:
-    def __init__(self):
-        self.plugins = {}
-    
-    def register_plugin(self, plugin: Plugin):
-        self.plugins[plugin.name] = plugin
-```
-- **Benefit:** Extensible architecture with hooks
-
-**10. Add Dependency Injection Container**
-- **Inspired by:** Cognee's gap (tight coupling)
-- **Implementation:**
-```python
-# commontrace/di.py
-from typing import Any, Callable, TypeVar
-
-T = TypeVar('T')
-
-class DIContainer:
-    def __init__(self):
-        self._services = {}
-        self._factories = {}
-    
-    def register(self, interface: Type[T], implementation: T):
-        self._services[interface] = implementation
-    
-    def register_factory(self, interface: Type[T], factory: Callable[[], T]):
-        self._factories[interface] = factory
-    
-    def get(self, interface: Type[T]) -> T:
-        if interface in self._services:
-            return self._services[interface]
-        if interface in self._factories:
-            return self._factories[interface]()
-        raise KeyError(f"Service not registered: {interface}")
-```
-- **Benefit:** Better testability with dependency injection
-
-### Priority 4: Code Quality Enhancements (Medium Impact, Low Effort)
-
-**11. Add Type Checking Enforcement**
-- **Inspired by:** Graphiti's type checking with Pyright
-- **Implementation:**
-```toml
-# pyproject.toml
-[tool.mypy]
-python_version = "3.10"
-strict = true
-warn_return_any = true
-warn_unused_configs = true
-disallow_untyped_defs = true
-```
-- **Benefit:** Type safety enforcement in CI
-
-**12. Standardize Error Handling**
-- **Inspired by:** Mem0's comprehensive exception hierarchy
-- **Implementation:**
-```python
-# commontrace/exceptions.py
-class CommonTraceError(Exception):
-    def __init__(self, message: str, code: str, suggestion: str = None):
-        self.message = message
-        self.code = code
-        self.suggestion = suggestion
-        super().__init__(message)
-
-class ValidationError(CommonTraceError):
-    pass
-
-class AuthenticationError(CommonTraceError):
-    pass
-
-class AuthorizationError(CommonTraceError):
-    pass
-```
-- **Benefit:** Structured error handling with error codes
-
-**13. Add Code Coverage Metrics**
-- **Inspired by:** EverOS's coverage configuration
-- **Implementation:**
-```toml
-# pyproject.toml
-[tool.coverage.run]
-source = ["commontrace", "hub"]
-omit = ["tests/*"]
-
-[tool.coverage.report]
-exclude_lines = [
-    "pragma: no cover",
-    "def __repr__",
-    "raise AssertionError",
-    "raise NotImplementedError"
-]
-
-[tool.coverage.html]
-directory = htmlcov
-```
-- **Benefit:** Coverage reporting with minimum threshold
-
-**14. Extract Magic Numbers to Constants**
-- **Inspired by:** Mem0's magic numbers gap
-- **Implementation:**
-```python
-# commontrace/constants.py
-MAX_HOPS = 4
-DEFAULT_MAX_WORKERS = 4
-MAX_BODY_BYTES = 1_000_000
-MAX_ITEMS = 200
-MAX_TEXT_CHARS = 20_000
-CACHE_TTL_SECONDS = 300
-RATE_LIMIT_PER_MINUTE = 60
-```
-- **Benefit:** Configurable parameters with documentation
-
-**15. Refactor Deep Nesting**
-- **Inspired by:** Cognee's deep nesting gap
-- **Implementation:** Extract nested logic to helper methods, reduce cyclomatic complexity
-- **Benefit:** Improved readability and maintainability
-
-### Priority 5: Adopt Standout Patterns (High Impact, Medium Effort)
-
-**16. Implement Closing LRU Cache**
-- **Inspired by:** Cognee's closing LRU cache
-- **Implementation:**
-```python
-# commontrace/closing_lru_cache.py
-import weakref
-import threading
-
-class ClosingLRUCache:
-    def __init__(self, maxsize: int = 128):
-        self._cache = {}
-        self._proxy_leases = weakref.WeakValueDictionary()
-        self._maxsize = maxsize
-        self._lock = threading.RLock()
-    
-    def get(self, key: str):
-        with self._lock:
-            if key in self._cache:
-                entry = self._cache[key]
-                if entry.proxy() is not None:
-                    return entry.proxy()
-        return None
-    
-    def put(self, key: str, value: Any, close_callback: Callable):
-        with self._lock:
-            if len(self._cache) >= self._maxsize:
-                self._evict()
-            proxy = weakref.proxy(value, close_callback)
-            self._cache[key] = CacheEntry(value, proxy)
-    
-    def _evict(self):
-        # Evict non-pinned entries
-        for key, entry in list(self._cache.items()):
-            if not entry.pinned:
-                del self._cache[key]
-                break
-```
-- **Benefit:** Safe resource management with automatic cleanup
-
-**17. Add Interface-Based Storage Adapters**
-- **Inspired by:** Cognee and Graphiti's interface pattern
-- **Implementation:**
-```python
-# commontrace/storage_interface.py
-from abc import ABC, abstractmethod
-
-class StorageAdapter(ABC):
-    @abstractmethod
-    async def read(self, path: str) -> str:
-        pass
-    
-    @abstractmethod
-    async def write(self, path: str, content: str) -> None:
-        pass
-    
-    @abstractmethod
-    async def list(self, path: str) -> List[str]:
-        pass
-    
-    @property
-    @abstractmethod
-    def capabilities(self) -> set:
-        return {"read", "write", "list"}
-
-class FileSystemAdapter(StorageAdapter):
-    def __init__(self, base_path: str):
-        self.base_path = base_path
-    
-    async def read(self, path: str) -> str:
-        full_path = os.path.join(self.base_path, path)
-        return await asyncio.to_thread(read_file, full_path)
-```
-- **Benefit:** Multi-backend support with capability detection
-
-**18. Implement Phased Batch Processing**
-- **Inspired by:** Mem0's phased pipeline
-- **Implementation:**
-```python
-# commontrace/ingest/phased_pipeline.py
-async def phased_trace_ingestion(traces: List[Trace]):
-    # Phase 0: Validation
-    validated = await validate_traces(traces)
-    
-    # Phase 1: Deduplication
-    deduped = await deduplicate_traces(validated)
-    
-    # Phase 2: Feature extraction (batch)
-    features = await extract_features_batch(deduped)
-    
-    # Phase 3: Clustering (batch)
-    clusters = await cluster_traces_batch(features)
-    
-    # Phase 4: Lesson generation (batch)
-    lessons = await generate_lessons_batch(clusters)
-    
-    return lessons
-```
-- **Benefit:** 10-100x reduction in expensive operations
-
-**19. Add Hybrid Scoring**
-- **Inspired by:** Mem0's hybrid scoring
-- **Implementation:**
-```python
-# commontrace/hybrid_scoring.py
-def hybrid_score(
-    semantic_score: float,
-    bm25_score: float,
-    temporal_boost: float,
-    graph_boost: float,
-    query_length: int
-) -> float:
-    # Adaptive normalization based on query complexity
-    tail_ratio = min(1.0, query_length / 10.0)
-    
-    # Additive combination
-    score = (
-        semantic_score * 0.4 +
-        bm25_score * 0.3 +
-        temporal_boost * 0.2 +
-        graph_boost * 0.1
-    )
-    
-    # Normalize to [0, 1]
-    return min(1.0, max(0.0, score))
-```
-- **Benefit:** Flexible multi-signal retrieval
-
-**20. Add Identity Key Protection**
-- **Inspired by:** Mem0's identity key protection
-- **Implementation:**
-```python
-# hub/auth.py
-_IDENTITY_KEYS = frozenset({
-    "user_id", "session_id", "agent_id", "org_id"
-})
-
-def strip_identity_keys(metadata: dict) -> dict:
-    """Remove identity keys to prevent privilege escalation."""
-    return {
-        k: v for k, v in metadata.items()
-        if k not in _IDENTITY_KEYS
-    }
-
-def create_lesson(
-    user_id: str,
-    metadata: dict,
-    # ... other params
-):
-    # user_id passed as dedicated parameter, not in metadata
-    metadata = strip_identity_keys(metadata)
-    # ... rest of implementation
-```
-- **Benefit:** Prevents privilege escalation in multi-tenant systems
-
----
-
-## PART 4: IMPLEMENTATION ROADMAP
-
-### Phase 1: Security Hardening (Weeks 1-2)
-- [ ] Implement secret manager integration (Priority 1.1)
-- [ ] Add gateway token rotation (Priority 1.2)
-- [ ] Add XSS protection (Priority 1.3)
-- [ ] Security audit and penetration testing
-
-### Phase 2: Performance Optimization (Weeks 3-4)
-- [ ] Implement query result caching (Priority 2.1)
-- [ ] Add HTTP connection pooling (Priority 2.2)
-- [ ] Expand async patterns (Priority 2.3)
-- [ ] Performance benchmarking and optimization
-
-### Phase 3: Architecture Improvements (Weeks 5-8)
-- [ ] Implement circuit breaker pattern (Priority 3.1)
-- [ ] Add event system (Priority 3.2)
-- [ ] Implement plugin system (Priority 3.3)
-- [ ] Add dependency injection container (Priority 3.4)
-
-### Phase 4: Code Quality Enhancements (Weeks 9-10)
-- [ ] Add type checking enforcement (Priority 4.1)
-- [ ] Standardize error handling (Priority 4.2)
-- [ ] Add code coverage metrics (Priority 4.3)
-- [ ] Extract magic numbers (Priority 4.4)
-- [ ] Refactor deep nesting (Priority 4.5)
-
-### Phase 5: Adopt Standout Patterns (Weeks 11-14)
-- [ ] Implement closing LRU cache (Priority 5.1)
-- [ ] Add interface-based storage adapters (Priority 5.2)
-- [ ] Implement phased batch processing (Priority 5.3)
-- [ ] Add hybrid scoring (Priority 5.4)
-- [ ] Add identity key protection (Priority 5.5)
-
-### Phase 6: Documentation and Testing (Weeks 15-16)
-- [ ] Update documentation for new patterns
-- [ ] Add integration tests for new features
-- [ ] Update security documentation
-- [ ] Create performance testing suite
-- [ ] Final audit and review
-
----
-
-## SUMMARY
-
-CommonTrace-v2 demonstrates exceptional engineering maturity with strong security practices (argon2 authentication, RBAC, audit logging, rate limiting), sophisticated performance optimizations (caching, bounded parallelism, connection pooling), and a well-layered architecture. The codebase excels in type safety, testing infrastructure, and documentation quality.
-
-Key areas for improvement include centralized secret management, query result caching, circuit breaker patterns, and adoption of standout patterns from competitors (closing LRU cache, interface-based adapters, phased batch processing, hybrid scoring).
-
-The implementation roadmap prioritizes security hardening first, followed by performance optimization, architecture improvements, code quality enhancements, and adoption of competitor standout patterns. With these improvements, CommonTrace-v2 will solidify its position as a best-in-class memory protocol and code-review reference profile.
-
-**Total Estimated Effort:** 16 weeks across 6 phases
-**High-Impact Quick Wins:** Secret manager integration (1 week), query result caching (1 week), HTTP connection pooling (3 days)
-**Strategic Improvements:** Circuit breaker pattern (2 weeks), event system (2 weeks), plugin system (2 weeks)
+    Implementation: Add multi-tenancy flag, implement backend factory, add access 
+      control middleware.
+    Reference: /root/Test/cognee/cognee/backend/
+
+================================================================================
+SUMMARY
+================================================================================
+
+CommonTrace has strong theoretical foundations but lags competitors in:
+- Integration: No MCP server, CLI, dashboard, or framework integrations
+- Features: No user profiles, observations, mental models, or knowledge wiki
+- Reliability: Basic error handling, logging, and CI/CD
+- Performance: Keyword-only retrieval limits multi-hop and summarization
+
+RECOMMENDED ROADMAP:
+1. Months 1-2: MCP server, CLI, dashboard, hybrid search
+2. Months 3-6: User profiles, temporal reasoning, framework integrations, 
+   benchmarking
+3. Months 6-12: Observations, knowledge wiki, data connectors, migration tools
+4. 12+ months: Temporal invalidation, mental models, code graph, markdown-first
+
+KEY PATTERNS TO ADOPT:
+- EverOS's error handling and logging (best in class)
+- Cognee's testing and rate limiting (most comprehensive)
+- Hindsight's Helm charts and security scanning (production-grade)
+- Mem0's provider pattern (most flexible)
+- Graphiti's bi-temporal model (most sophisticated)
+
+================================================================================
+END OF REPORT
+================================================================================
